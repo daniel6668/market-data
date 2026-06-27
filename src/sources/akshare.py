@@ -17,17 +17,17 @@ class AKShareSource:
     def get_etf_list(self) -> pd.DataFrame:
         """获取 ETF 列表"""
         self._wait()
-        df = ak.fund_etf_fund_info_em()
+        df = ak.fund_etf_spot_em()
         # 重命名列对齐 stock_info
         result = pd.DataFrame()
         if not df.empty:
-            result["ts_code"] = df["基金代码"]
-            result["name"] = df["基金简称"]
+            result["ts_code"] = df["代码"]
+            result["name"] = df["名称"]
             result["market"] = "ETF"
-            result["list_date"] = pd.to_datetime(df.get("上市日期", pd.NaT), errors="coerce").dt.date
+            result["list_date"] = pd.to_datetime(df.get("数据日期", pd.NaT), errors="coerce").dt.date
             result["industry"] = "ETF"
             result["area"] = "CN"
-            result["exchange"] = df.get("上市地", "SH/SZ")
+            result["exchange"] = "SH/SZ"
             result["is_hs"] = None
             result["list_status"] = "L"
             result["delist_date"] = None
@@ -44,7 +44,7 @@ class AKShareSource:
                                  end_date=end_date.replace("-", ""))
         result = pd.DataFrame()
         if not df.empty:
-            result["ts_code"] = code
+            result["ts_code"] = code       # 第一列，对齐表结构
             result["trade_date"] = pd.to_datetime(df["日期"]).dt.date
             result["open"] = pd.to_numeric(df["开盘"], errors="coerce")
             result["high"] = pd.to_numeric(df["最高"], errors="coerce")

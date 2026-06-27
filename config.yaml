@@ -1,6 +1,6 @@
 # 市场数据采集配置
 tushare:
-  token: ""  # 填你的 Tushare Pro token，或设环境变量 TUSHARE_TOKEN
+  token: "d98706c9f69f0ec43109956d7213b0afb8fbd1facd5bef341da274f2"
 
 database:
   path: "data/market.duckdb"

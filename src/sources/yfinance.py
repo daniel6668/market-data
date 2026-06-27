@@ -61,5 +61,8 @@ class YFinanceSource:
             result["adj_close"] = df.get("Adj Close", df["Close"]).astype(float) if "Adj Close" in df.columns else df["Close"].astype(float)
             result["volume"] = df["Volume"].astype("int64")
             return result
-        except Exception:
+        except Exception as e:
+            msg = str(e)
+            if "Rate" in msg or "Too Many" in msg:
+                raise  # 频次限制不应吞掉
             return pd.DataFrame()

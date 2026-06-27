@@ -187,6 +187,7 @@ class Pipeline:
 
         Returns: 写入行数
         """
+        import time
         last_error = None
 
         for attempt in range(self.max_retries):

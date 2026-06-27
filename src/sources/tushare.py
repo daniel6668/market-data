@@ -36,6 +36,9 @@ class TushareSource:
             if not df.empty:
                 df["market"] = "A"
                 df["exchange"] = df["ts_code"].str.split(".").str[1]
+                # 删除 symbol 列 — stock_info 表没有此列
+                if "symbol" in df.columns:
+                    df = df.drop(columns=["symbol"])
         elif market == "HK":
             df = self._call(self.pro.hk_basic,
                            fields='ts_code,name,list_date,delist_date')

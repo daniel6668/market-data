@@ -1,0 +1,7 @@
+pyproject.toml
+src/market_data.egg-info/PKG-INFO
+src/market_data.egg-info/SOURCES.txt
+src/market_data.egg-info/dependency_links.txt
+src/market_data.egg-info/requires.txt
+src/market_data.egg-info/top_level.txt
+src/sources/__init__.py

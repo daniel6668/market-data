@@ -1,0 +1,33 @@
+# 市场数据采集配置
+tushare:
+  token: ""  # 填你的 Tushare Pro token，或设环境变量 TUSHARE_TOKEN
+
+database:
+  path: "data/market.duckdb"
+
+data:
+  start_date: "2015-01-01"
+  markets:
+    - A      # A股
+    - ETF    # ETF
+    - HK     # 港股
+    - US     # 美股
+
+rate_limit:
+  tushare:
+    max_calls: 190
+    period: 60
+  akshare:
+    max_calls: 48
+    period: 60
+  yfinance:
+    max_calls: 1900
+    period: 3600
+
+retry:
+  max_attempts: 3
+  backoff_base: 5
+
+logging:
+  level: "INFO"
+  file: "data/pipeline.log"

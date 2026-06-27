@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: market-data
+Version: 0.1.0
+Summary: A-share + ETF + HK + US market data pipeline
+Requires-Python: >=3.11
+Requires-Dist: duckdb>=1.0
+Requires-Dist: tushare>=1.4
+Requires-Dist: akshare>=1.14
+Requires-Dist: yfinance>=0.2
+Requires-Dist: pandas>=2.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: rich>=13.0
+Requires-Dist: schedule>=1.2

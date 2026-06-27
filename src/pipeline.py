@@ -170,7 +170,29 @@ class Pipeline:
     def _get_stock_list(self, market: str) -> pd.DataFrame:
         """根据市场获取股票列表"""
         if market == "A":
-            df = self.ts.get_stock_list("A")
+            try:
+                df = self.ts.get_stock_list("A")
+                if not df.empty:
+                    return df
+            except Exception as e:
+                self.logger.warning(f"Tushare stock_basic 失败, 用 AKShare 替代: {e}")
+            # AKShare fallback — 添加交易所后缀
+            df = self.ak.get_a_stock_list()
+            if df.empty:
+                return df
+            # 补全 ts_code 后缀
+            def add_suffix(code):
+                code = str(code).zfill(6)
+                if code.startswith(('0','3')): return code + '.SZ'
+                if code.startswith('6'): return code + '.SH'
+                if code.startswith('4'): return code + '.BJ'
+                if code.startswith('8'): return code + '.BJ'
+                return code + '.SZ'
+            df["ts_code"] = df["ts_code"].apply(add_suffix)
+            df["exchange"] = df["ts_code"].str.split(".").str[1]
+            df["list_status"] = "L"
+            df["is_hs"] = None
+            return df
         elif market == "HK":
             df = self.ts.get_stock_list("HK")
         elif market == "ETF":

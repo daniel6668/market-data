@@ -42,17 +42,18 @@ class AKShareSource:
         df = ak.fund_etf_hist_em(symbol=code, period="daily",
                                  start_date=start_date.replace("-", ""),
                                  end_date=end_date.replace("-", ""))
-        result = pd.DataFrame()
-        if not df.empty:
-            result["ts_code"] = code       # 第一列，对齐表结构
-            result["trade_date"] = pd.to_datetime(df["日期"]).dt.date
-            result["open"] = pd.to_numeric(df["开盘"], errors="coerce")
-            result["high"] = pd.to_numeric(df["最高"], errors="coerce")
-            result["low"] = pd.to_numeric(df["最低"], errors="coerce")
-            result["close"] = pd.to_numeric(df["收盘"], errors="coerce")
-            result["vol"] = pd.to_numeric(df["成交量"], errors="coerce")
-            result["amount"] = pd.to_numeric(df["成交额"], errors="coerce")
-        return result
+        if df.empty:
+            return pd.DataFrame()
+        return pd.DataFrame({
+            "ts_code": code,
+            "trade_date": pd.to_datetime(df["日期"]).dt.date,
+            "open": pd.to_numeric(df["开盘"], errors="coerce"),
+            "high": pd.to_numeric(df["最高"], errors="coerce"),
+            "low": pd.to_numeric(df["最低"], errors="coerce"),
+            "close": pd.to_numeric(df["收盘"], errors="coerce"),
+            "vol": pd.to_numeric(df["成交量"], errors="coerce"),
+            "amount": pd.to_numeric(df["成交额"], errors="coerce"),
+        })
 
     def get_a_stock_list(self) -> pd.DataFrame:
         """获取 A 股列表（作为 Tushare 的补充/备用）"""

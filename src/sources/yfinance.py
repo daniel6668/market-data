@@ -51,16 +51,16 @@ class YFinanceSource:
             if df.empty:
                 return pd.DataFrame()
             df = df.reset_index()
-            result = pd.DataFrame()
-            result["ts_code"] = ticker
-            result["trade_date"] = pd.to_datetime(df["Date"]).dt.date
-            result["open"] = df["Open"].astype(float)
-            result["high"] = df["High"].astype(float)
-            result["low"] = df["Low"].astype(float)
-            result["close"] = df["Close"].astype(float)
-            result["adj_close"] = df.get("Adj Close", df["Close"]).astype(float) if "Adj Close" in df.columns else df["Close"].astype(float)
-            result["volume"] = df["Volume"].astype("int64")
-            return result
+            return pd.DataFrame({
+                "ts_code": ticker,
+                "trade_date": pd.to_datetime(df["Date"]).dt.date,
+                "open": df["Open"].astype(float),
+                "high": df["High"].astype(float),
+                "low": df["Low"].astype(float),
+                "close": df["Close"].astype(float),
+                "adj_close": df.get("Adj Close", df["Close"]).astype(float) if "Adj Close" in df.columns else df["Close"].astype(float),
+                "volume": df["Volume"].astype("int64"),
+            })
         except Exception as e:
             msg = str(e)
             if "Rate" in msg or "Too Many" in msg:

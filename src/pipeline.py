@@ -45,6 +45,8 @@ class Pipeline:
         self._tc = None       # Tencent (PE/PB/市值)
         self._em = None       # EastMoney (资金流/研报/行业)
         self._sina = None     # Sina (财报三表)
+        self._emdc = None     # EastMoneyDatacenter (Phase 1: 融资/龙虎榜等)
+        self._ths_nb = None   # ThsNorthbound (Phase 1: 北向资金)
 
         # 加载交易日历（如果数据库有数据，否则 fallback 到周末检查）
         TradingCalendar.load_from_db(self.conn)
@@ -102,6 +104,22 @@ class Pipeline:
             from .sources.sina_source import SinaSource
             self._sina = SinaSource()
         return self._sina
+
+    @property
+    def emdc(self):
+        """东财数据中心 — 融资融券/龙虎榜/大宗/股东/分红/解禁（Phase 1）"""
+        if self._emdc is None:
+            from .sources.eastmoney_datacenter import EastMoneyDatacenterSource
+            self._emdc = EastMoneyDatacenterSource()
+        return self._emdc
+
+    @property
+    def ths_nb(self):
+        """同花顺北向资金（Phase 1）"""
+        if self._ths_nb is None:
+            from .sources.ths_northbound import ThsNorthboundSource
+            self._ths_nb = ThsNorthboundSource()
+        return self._ths_nb
 
     def init_market(self, market: str) -> dict:
         """初始化一个市场：拉股票列表 + 全部历史数据
@@ -452,6 +470,82 @@ class Pipeline:
                     upsert_financial_reports(self.conn, df)
                     total += len(df)
             self.logger.info(f"  {name}: {total} 期")
+        return total
+
+    # ── Phase 1: 数据补全采集 ──
+
+    def update_northbound(self) -> int:
+        """采集北向资金日数据 — 拉取当日 + 写入 DB + 更新缓存"""
+        df = self.ths_nb.get_daily_flow()
+        if df.empty:
+            self.logger.info("北向资金: 今日无数据（非交易日？）")
+            return 0
+        df_db = df[["date", "hgt_yi", "sgt_yi"]]
+        upsert_daily(self.conn, "northbound_flow", df_db)
+        self.logger.info(f"北向资金: 沪 {df_db.iloc[0]['hgt_yi']:.1f}亿 "
+                        f"深 {df_db.iloc[0]['sgt_yi']:.1f}亿")
+        return len(df_db)
+
+    def update_margin_trading(self, market: str = "A") -> int:
+        """采集全市场融资融券（日级）"""
+        if market != "A":
+            return 0
+        stocks = get_stocks_needing_update(self.conn, market, "2024-01-01")
+        total = 0
+        for _, row in stocks.iterrows():
+            code = row["ts_code"]
+            df = self.emdc.get_margin_trading(code, page_size=30)
+            if not df.empty:
+                upsert_daily(self.conn, "margin_trading", df)
+                total += len(df)
+        self.logger.info(f"融资融券采集完成: {total} 条")
+        return total
+
+    def update_dragon_tiger(self, market: str = "A") -> int:
+        """采集全市场龙虎榜（近30日）"""
+        if market != "A":
+            return 0
+        from datetime import datetime
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+        stocks = get_stocks_needing_update(self.conn, market, "2024-01-01")
+        total = 0
+        for _, row in stocks.iterrows():
+            code = row["ts_code"]
+            df = self.emdc.get_dragon_tiger(code, trade_date, look_back=30)
+            if not df.empty:
+                upsert_daily(self.conn, "dragon_tiger", df)
+                total += len(df)
+        self.logger.info(f"龙虎榜采集完成: {total} 条")
+        return total
+
+    def update_concept_blocks(self, market: str = "A") -> int:
+        """更新全市场概念板块归属（快照）"""
+        if market != "A":
+            return 0
+        stocks = get_stocks_needing_update(self.conn, market, "2024-01-01")
+        total = 0
+        for _, row in stocks.iterrows():
+            code = row["ts_code"]
+            df = self.em.get_concept_blocks(code)
+            if not df.empty:
+                upsert_daily(self.conn, "stock_boards", df)
+                total += len(df)
+        self.logger.info(f"概念板块归属更新: {total} 条")
+        return total
+
+    def update_holder_num(self, market: str = "A") -> int:
+        """采集全市场股东户数（季度）"""
+        if market != "A":
+            return 0
+        stocks = get_stocks_needing_update(self.conn, market, "2024-01-01")
+        total = 0
+        for _, row in stocks.iterrows():
+            code = row["ts_code"]
+            df = self.emdc.get_holder_num(code, page_size=10)
+            if not df.empty:
+                upsert_daily(self.conn, "holder_num", df)
+                total += len(df)
+        self.logger.info(f"股东户数采集完成: {total} 条")
         return total
 
     def close(self):

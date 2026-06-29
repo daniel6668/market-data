@@ -1,9 +1,9 @@
 # market-data 技术文档
 
 **项目**: A股 + ETF + 港股 + 美股 历史数据采集管道  
-**版本**: 0.2.0 (多数据源架构)  
+**版本**: 0.3.0 (Phase 1 数据补全)  
 **日期**: 2026-06-29  
-**技术栈**: Python 3.11 / DuckDB / mootdx / 腾讯财经 / 东财 push2 / 新浪财报 / Tushare / AKShare / yfinance  
+**技术栈**: Python 3.11 / DuckDB / mootdx / 腾讯财经 / 东财 push2+datacenter / 新浪财报 / 同花顺北向 / Tushare / AKShare / yfinance  
 
 ---
 
@@ -26,6 +26,19 @@
 | **P6** | **持久化+调度** | **3** | **新增3张DB表 + CLI命令 + 调度集成** |
 | **P7** | **工程化** | **3** | **CLI扩展、README、GitHub发布** |
 | **P8** | **健壮性增强** | **3** | **mootdx缓存+重连、push2his重试、行业排名日期修正** |
+| **P9** | **数据补全** | **8** | **北向资金、融资融券、龙虎榜、大宗交易、股东户数、分红送转、限售解禁、概念板块** |
+
+### Phase 1 新增数据源 (v0.3.0)
+
+| 来源 | 数据 | 文件 |
+|------|------|------|
+| 同花顺 hsgtApi | 北向资金 (沪股通/深股通日级) | `src/sources/ths_northbound.py` |
+| 东财 datacenter | 融资融券/龙虎榜/大宗/股东/分红/解禁 (6合1) | `src/sources/eastmoney_datacenter.py` |
+| 东财 slist | 概念板块归属 | `src/sources/eastmoney_source.py` (扩展) |
+
+新增 DuckDB 表: `northbound_flow`, `margin_trading`, `dragon_tiger`, `block_trade`, `holder_num`, `dividend`, `lockup_expiry`, `stock_boards`
+
+新增 CLI 命令: `northbound`, `margin`, `dragon`, `blocks`, `holders`
 
 ---
 

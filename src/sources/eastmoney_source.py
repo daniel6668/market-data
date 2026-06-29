@@ -1,7 +1,7 @@
-"""东方财富 push2 系列数据源 — 资金流 / 研报 / 行业板块
+"""东方财富 push2 系列数据源 — 资金流 / 研报 / 行业板块 / 概念归属
 
 仅用于东财独有数据，已内置 em_get() 串行限流防封。
-datacenter-web 全系已下线（2026-06），改用 push2/push2his/reportapi。
+datacenter-web 系列已独立为 eastmoney_datacenter.py（Phase 1）。
 """
 import logging
 import time

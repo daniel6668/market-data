@@ -6,6 +6,9 @@
   python cli.py update [--market A|ETF|HK|US|all]
   python cli.py backfill <market> <start_date> <end_date>
   python cli.py status [--market A|ETF|HK|US]
+  python cli.py fundflow     ← 全市场资金流采集
+  python cli.py research     ← 全市场研报采集
+  python cli.py financials   ← 全市场财报采集
 """
 import sys
 from src.pipeline import Pipeline
@@ -78,6 +81,33 @@ def cmd_status(args):
     conn.close()
 
 
+def cmd_fundflow(args):
+    pipeline = Pipeline()
+    try:
+        n = pipeline.update_fund_flow("A")
+        print(f"资金流采集完成: {n} 条")
+    finally:
+        pipeline.close()
+
+
+def cmd_research(args):
+    pipeline = Pipeline()
+    try:
+        n = pipeline.update_research("A")
+        print(f"研报采集完成: {n} 篇")
+    finally:
+        pipeline.close()
+
+
+def cmd_financials(args):
+    pipeline = Pipeline()
+    try:
+        n = pipeline.update_financials("A")
+        print(f"财报采集完成: {n} 期")
+    finally:
+        pipeline.close()
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -112,6 +142,9 @@ def main():
         "update": cmd_update,
         "backfill": cmd_backfill,
         "status": cmd_status,
+        "fundflow": cmd_fundflow,
+        "research": cmd_research,
+        "financials": cmd_financials,
     }
     
     if cmd not in commands:

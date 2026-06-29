@@ -1,7 +1,7 @@
 # market-data 技术文档
 
 **项目**: A股 + ETF + 港股 + 美股 历史数据采集管道 + 分析引擎  
-**版本**: 0.4.0 (Phase 2 分析引擎)  
+**版本**: 0.5.0 (Phase 3 AI Chat)  
 **日期**: 2026-06-29  
 **技术栈**: Python 3.11 / DuckDB / mootdx / 腾讯财经 / 东财 / 同花顺北向 / vectorbt / stockstats  
 

@@ -3,17 +3,24 @@ import sys
 import os
 import json
 
-# 确保项目根在 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import gradio as gr
 from src.agent.llm import get_client, chat
 from src.agent.tools import TOOLS, execute_tool
-from src.db import get_connection
 from src.utils import load_config
 
 config = load_config()
-conn = get_connection(config)
+
+# 延迟连接 DuckDB，避免启动时锁冲突
+_conn = None
+
+def _get_conn():
+    global _conn
+    if _conn is None:
+        from src.db import get_connection
+        _conn = get_connection(config)
+    return _conn
 
 SYSTEM_PROMPT = """你是一个 A 股投资分析助手，帮助用户筛选股票、分析个股、回测策略。
 
@@ -49,7 +56,6 @@ def respond(message, history):
     msg = resp.choices[0].message
 
     if msg.tool_calls:
-        # 记录 tool_calls
         tool_calls_formatted = []
         for tc in msg.tool_calls:
             tool_calls_formatted.append({
@@ -63,13 +69,15 @@ def respond(message, history):
             "tool_calls": tool_calls_formatted,
         })
 
-        # 执行工具
         for tc in msg.tool_calls:
             try:
                 args = json.loads(tc.function.arguments)
             except json.JSONDecodeError:
                 args = {}
-            result = execute_tool(tc.function.name, args, conn)
+            try:
+                result = execute_tool(tc.function.name, args, _get_conn())
+            except Exception as e:
+                result = f"工具执行失败: {e}"
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,

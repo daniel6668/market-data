@@ -159,7 +159,7 @@ class EastMoneySource(DataSource):
         # 如果当天数据全为 0，往前试最近 3 个交易日
         for offset in range(3):
             try:
-                r = _em().get(url, params=params, timeout=15)
+                r = _em().get("https://push2.eastmoney.com/api/qt/clist/get", params=params, timeout=15)
                 d = r.json()
                 items = d.get("data", {}).get("diff", [])
                 if items and any(float(i.get("f3", 0)) != 0 for i in items):
@@ -189,6 +189,55 @@ class EastMoneySource(DataSource):
                 "trade_date": date.today(),
             })
         return pd.DataFrame(rows[:top_n])
+
+    # ── 概念板块归属 ──
+
+    def get_concept_blocks(self, ts_code: str) -> pd.DataFrame:
+        """个股所属板块/概念归属（东财 slist，一次请求拿全）
+
+        返回行业/概念/地域混合列表，板块名本身自解释。
+
+        Returns DataFrame columns:
+            ts_code, board_name, board_code(BK码),
+            change_pct, lead_stock(龙头股)
+        """
+        market_code = "1" if ts_code.startswith("6") else "0"
+        params = {
+            "fltt": "2", "invt": "2",
+            "secid": f"{market_code}.{ts_code}",
+            "spt": "3", "pi": "0", "pz": "200", "po": "1",
+            "fields": "f12,f14,f3,f128",
+        }
+        try:
+            r = _em().get(
+                "https://push2.eastmoney.com/api/qt/slist/get",
+                params=params,
+                headers={"Referer": "https://quote.eastmoney.com/"},
+                timeout=15,
+            )
+            d = r.json()
+        except Exception as e:
+            logger.warning(f"概念板块 {ts_code} 失败: {e}")
+            return pd.DataFrame()
+
+        diff = (d.get("data") or {}).get("diff") or {}
+        items = diff.values() if isinstance(diff, dict) else diff
+        if not items:
+            return pd.DataFrame()
+
+        rows = []
+        for it in items:
+            name = it.get("f14", "")
+            if not name:
+                continue
+            rows.append({
+                "ts_code": ts_code,
+                "board_name": name,
+                "board_code": it.get("f12", ""),
+                "change_pct": it.get("f3", ""),
+                "lead_stock": it.get("f128", ""),
+            })
+        return pd.DataFrame(rows)
 
     @property
     def supports_extra(self) -> bool:

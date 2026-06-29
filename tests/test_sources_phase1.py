@@ -93,3 +93,15 @@ def test_northbound_cache():
     _save_snapshot("2026-01-01", 10.5, -3.2)
     df = _load_history(10)
     assert isinstance(df, pd.DataFrame)
+
+
+def test_concept_blocks_returns_data():
+    """验证概念板块归属数据拉取（smoke test）"""
+    from src.sources.eastmoney_source import EastMoneySource
+    source = EastMoneySource()
+    df = source.get_concept_blocks("600519")
+    assert isinstance(df, pd.DataFrame)
+    if not df.empty:
+        assert "board_name" in df.columns
+        assert "board_code" in df.columns
+        assert "ts_code" in df.columns

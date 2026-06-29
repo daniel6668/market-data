@@ -62,3 +62,34 @@ def test_lockup_expiry_returns_data():
     source = EastMoneyDatacenterSource()
     df = source.get_lockup_expiry("002475", "")
     assert isinstance(df, pd.DataFrame)
+
+
+def test_northbound_source_exists():
+    """验证北向资金源可以导入"""
+    from src.sources.ths_northbound import ThsNorthboundSource
+    source = ThsNorthboundSource()
+    assert source is not None
+
+
+def test_northbound_realtime_returns_data():
+    """验证北向资金实时数据拉取（smoke test）"""
+    from src.sources.ths_northbound import ThsNorthboundSource
+    source = ThsNorthboundSource()
+    df = source.get_daily_flow()
+    assert isinstance(df, pd.DataFrame)
+    if not df.empty:
+        assert "date" in df.columns
+        assert "hgt_yi" in df.columns
+        assert "sgt_yi" in df.columns
+
+
+def test_northbound_cache():
+    """验证北向资金本地缓存读写"""
+    from src.sources.ths_northbound import (
+        _northbound_cache_path, _save_snapshot, _load_history
+    )
+    path = _northbound_cache_path()
+    assert path is not None
+    _save_snapshot("2026-01-01", 10.5, -3.2)
+    df = _load_history(10)
+    assert isinstance(df, pd.DataFrame)

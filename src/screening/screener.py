@@ -92,6 +92,7 @@ class StockScreener:
             FROM stock_info si
             {"".join(joins)}
             WHERE {" AND ".join(where)}
+            ORDER BY si.ts_code
             LIMIT 100
         """
         try:

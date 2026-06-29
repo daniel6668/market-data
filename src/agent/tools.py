@@ -140,11 +140,11 @@ def _search_stocks(conn, args):
                 "hint": f"无匹配。a_daily_basic:{basic_count}行"}, ensure_ascii=False)
 
     # 确保列存在
-    cols = ["ts_code", "name", "pe", "pb", "change_pct", "main_net_5d"]
+    cols = ["ts_code", "name", "pe", "pb", "change_pct"]
     avail = [c for c in cols if c in df.columns]
     rows = df[avail].values.tolist()
     col_labels = {"ts_code": "代码", "name": "名称", "pe": "PE", "pb": "PB",
-                  "change_pct": "涨跌幅%", "main_net_5d": "主力净流入5日"}
+                  "change_pct": "涨跌幅%"}
     return json.dumps({
         "type": "table",
         "columns": [col_labels.get(c, c) for c in avail],

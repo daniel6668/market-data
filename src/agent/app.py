@@ -153,8 +153,8 @@ def create_ui():
                 with gr.Column(scale=2):
                     result_table = gr.Dataframe(
                         label="筛选结果 (勾选后可操作)", interactive=True,
-                        headers=["代码","名称","PE","PB","涨跌幅%","主力净流入"],
-                        datatype=["str","str","number","number","number","number"],
+                        headers=["代码","名称","PE","PB","涨跌幅%"],
+                        datatype=["str","str","number","number","number"],
                         min_width=400)
                     select_info = gr.Textbox(label="操作结果", interactive=False)
                     with gr.Row():

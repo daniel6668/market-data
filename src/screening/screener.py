@@ -178,8 +178,7 @@ class StockScreener:
             SELECT si.ts_code, si.name,
                    COALESCE({ab}.pe,0) pe,
                    COALESCE({ab}.pb,0) pb,
-                   COALESCE({sf}.ret_5d,0) change_pct,
-                   COALESCE({sf}.main_net_5d,0) main_net_5d
+                   COALESCE({sf}.ret_5d,0) change_pct
             FROM stock_info si
             {"".join(joins)}
             WHERE {" AND ".join(where)}

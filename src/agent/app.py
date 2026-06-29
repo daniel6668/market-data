@@ -122,4 +122,8 @@ def create_ui():
 
 if __name__ == "__main__":
     app = create_ui()
-    app.launch(server_name="0.0.0.0", server_port=7860, share=False, theme=gr.themes.Soft())
+    print("=" * 50)
+    print("  Market Data AI 启动成功！")
+    print("  打开浏览器访问: http://127.0.0.1:7860")
+    print("=" * 50)
+    app.launch(server_name="127.0.0.1", server_port=7860, share=False, theme=gr.themes.Soft())

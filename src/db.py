@@ -259,7 +259,16 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             PRIMARY KEY (ts_code, board_name)
         )
     """)
-    # ── Phase 2: 因子表 ──
+    # ── UI: 自选池 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS watchlist (
+            ts_code   VARCHAR NOT NULL PRIMARY KEY,
+            name      VARCHAR,
+            added_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            source_condition TEXT,
+            notes     TEXT
+        )
+    """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS stock_factors (
             ts_code    VARCHAR NOT NULL,

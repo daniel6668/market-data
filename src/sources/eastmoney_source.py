@@ -55,11 +55,7 @@ class EastMoneySource(DataSource):
     # ── 日级资金流（主力/大单/中单/小单/超大单）──
 
     def get_fund_flow(self, ts_code: str, days: int = 120) -> pd.DataFrame:
-        """个股日级资金流向（最近 days 个交易日）
-
-        字段: date, main_net, small_net, mid_net, large_net, super_net, main_pct
-        单位: 元（main_net）、%（main_pct）
-        """
+        """个股日级资金流向（最近 days 个交易日）"""
         mkt = "1" if ts_code.startswith(("6", "9")) else "0"
         url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
         params = {
@@ -68,14 +64,20 @@ class EastMoneySource(DataSource):
             "fields2": "f51,f52,f53,f54,f55,f56,f57",
             "lmt": str(min(days, 120)),
         }
-        try:
-            r = _em().get(url, params=params, timeout=15)
-            d = r.json()
-        except Exception as e:
-            logger.warning(f"push2his 资金流 {ts_code} 失败: {e}")
-            return pd.DataFrame()
-
-        klines = d.get("data", {}).get("klines", [])
+        # 最多重试 2 次，东财 API 间歇性返回空
+        for attempt in range(2):
+            try:
+                r = _em().get(url, params=params, timeout=15)
+                d = r.json()
+                if d.get("data") is not None:
+                    break
+            except Exception as e:
+                if attempt == 0:
+                    time.sleep(1.5)
+                    continue
+                logger.warning(f"push2his 资金流 {ts_code} 失败: {e}")
+                return pd.DataFrame()
+        klines = (d.get("data") or {}).get("klines", [])
         rows = []
         for line in klines:
             parts = line.split(",")
@@ -140,26 +142,36 @@ class EastMoneySource(DataSource):
 
     # ── 行业板块排名 ──
 
-    def get_industry_ranking(self, top_n: int = 20) -> pd.DataFrame:
+    def get_industry_ranking(self, top_n: int = 20, target_date: date = None) -> pd.DataFrame:
         """全市场行业板块涨跌幅排名（~100 个行业）
 
-        字段: rank, name, code, change_pct, up_count, down_count, leader
+        target_date: 目标日期，None=今天（如果今天无数据则自动往前找）
         """
-        url = "https://push2.eastmoney.com/api/qt/clist/get"
+        if target_date is None:
+            target_date = date.today()
+
         params = {
             "pn": "1", "pz": "100", "po": "1", "np": "1",
             "fltt": "2", "invt": "2",
             "fs": "m:90+t:2",
             "fields": "f2,f3,f4,f12,f14,f104,f105,f128,f136,f140",
         }
-        try:
-            r = _em().get(url, params=params, timeout=15)
-            d = r.json()
-        except Exception as e:
-            logger.warning(f"行业排名失败: {e}")
+        # 如果当天数据全为 0，往前试最近 3 个交易日
+        for offset in range(3):
+            try:
+                r = _em().get(url, params=params, timeout=15)
+                d = r.json()
+                items = d.get("data", {}).get("diff", [])
+                if items and any(float(i.get("f3", 0)) != 0 for i in items):
+                    break  # 有有效数据
+            except Exception as e:
+                if offset == 2:
+                    logger.warning(f"行业排名失败: {e}")
+                    return pd.DataFrame()
+            time.sleep(1.0)
+            target_date = date.fromordinal(target_date.toordinal() - 1)
+        else:
             return pd.DataFrame()
-
-        items = d.get("data", {}).get("diff", [])
         if not items:
             return pd.DataFrame()
 

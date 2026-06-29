@@ -5,6 +5,7 @@ A 股日线数据的主要来源，替代 Tushare daily 接口。
 """
 import socket
 import logging
+import random
 from datetime import datetime, date
 from typing import Optional
 
@@ -15,15 +16,16 @@ from .base import DataSource
 
 logger = logging.getLogger(__name__)
 
-# 通达信服务器列表（2026-06 实测可用）
+# 通达信服务器列表（来源: mootdx bestip + a-stock-data）
 _TDX_SERVERS = [
-    ("119.97.185.59", 7709),
-    ("124.70.133.119", 7709),
-    ("116.205.183.150", 7709),
-    ("123.60.73.44", 7709),
-    ("116.205.163.254", 7709),
-    ("121.36.225.169", 7709),
+    ("119.97.185.59", 7709), ("124.70.133.119", 7709),
+    ("116.205.183.150", 7709), ("123.60.73.44", 7709),
+    ("116.205.163.254", 7709), ("121.36.225.169", 7709),
+    ("123.60.70.228", 7709), ("124.71.9.153", 7709),
+    ("110.41.147.114", 7709), ("124.71.187.122", 7709),
 ]
+# 上次探测成功的服务器缓存
+_cache_server: Optional[tuple] = None
 
 
 def _probe_server(ip: str, port: int, timeout: float = 2.0) -> bool:
@@ -35,9 +37,16 @@ def _probe_server(ip: str, port: int, timeout: float = 2.0) -> bool:
 
 
 def _find_server() -> Optional[tuple]:
-    for ip, port in _TDX_SERVERS:
+    """顺序探测服务器列表，随机打乱提高命中率"""
+    global _cache_server
+    if _cache_server and _probe_server(*_cache_server, timeout=1.0):
+        return _cache_server
+    servers = list(_TDX_SERVERS)
+    random.shuffle(servers)
+    for ip, port in servers:
         if _probe_server(ip, port):
-            return (ip, port)
+            _cache_server = (ip, port)
+            return _cache_server
     return None
 
 
@@ -52,9 +61,23 @@ class MootdxSource(DataSource):
         self._client: Optional[Quotes] = None
 
     def _get_client(self) -> Quotes:
-        if self._client is None:
-            self._client = Quotes.factory(market="std", server=self._server)
+        if self._client is None or not self._check_alive():
+            # 重新探测服务器
+            server = _find_server()
+            if server:
+                self._server = server
+                self._client = Quotes.factory(market="std", server=server)
+            elif self._client is None:
+                raise RuntimeError("所有通达信服务器均不可达")
         return self._client
+
+    def _check_alive(self) -> bool:
+        """快速检查当前客户端是否可用"""
+        try:
+            self._client.quotes(symbol=["000001"])
+            return True
+        except Exception:
+            return False
 
     # ── 股票列表（mootdx 不支持，空实现，由上层 fallback 到 Tushare）──
 

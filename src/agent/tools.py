@@ -83,9 +83,18 @@ def _search_stocks(conn, args):
         conditions.append({"factor": "rsi14", "op": "lt", "value": args["rsi_max"]})
     if not conditions:
         return "请指定至少一个筛选条件（如 pe_max=30）"
+
+    # 诊断：检查数据是否存在
+    basic_count = conn.execute("SELECT COUNT(*) FROM a_daily_basic").fetchone()[0]
+    factors_count = conn.execute("SELECT COUNT(*) FROM stock_factors").fetchone()[0]
+    stocks_count = conn.execute("SELECT COUNT(*) FROM stock_info WHERE market='A'").fetchone()[0]
+
     df = screener.by_conditions(conditions)
     if df.empty:
-        return "无匹配结果"
+        return (f"无匹配结果。\n\n"
+                f"📊 数据状态: A股 {stocks_count} 只, "
+                f"a_daily_basic {basic_count} 行, stock_factors {factors_count} 行\n"
+                f"💡 提示: 如果 a_daily_basic 为 0，请先运行 `python cli.py update` 获取 PE 数据")
     return df.head(20).to_markdown(index=False)
 
 

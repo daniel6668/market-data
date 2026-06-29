@@ -42,6 +42,8 @@ class Pipeline:
         self._yf = None
         self._mdx = None      # mootdx (A 股日线首选)
         self._tc = None       # Tencent (PE/PB/市值)
+        self._em = None       # EastMoney (资金流/研报/行业)
+        self._sina = None     # Sina (财报三表)
 
         # 加载交易日历（如果数据库有数据，否则 fallback 到周末检查）
         TradingCalendar.load_from_db(self.conn)
@@ -83,6 +85,22 @@ class Pipeline:
             from .sources.tencent_source import TencentSource
             self._tc = TencentSource()
         return self._tc
+
+    @property
+    def em(self):
+        """东财数据源 — 资金流/研报/行业排名（push2 系列，已内置限流）"""
+        if self._em is None:
+            from .sources.eastmoney_source import EastMoneySource
+            self._em = EastMoneySource()
+        return self._em
+
+    @property
+    def sina(self):
+        """新浪财经数据源 — 财报三表（利润表/资产负债表/现金流）"""
+        if self._sina is None:
+            from .sources.sina_source import SinaSource
+            self._sina = SinaSource()
+        return self._sina
 
     def init_market(self, market: str) -> dict:
         """初始化一个市场：拉股票列表 + 全部历史数据

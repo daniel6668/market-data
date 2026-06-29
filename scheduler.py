@@ -62,6 +62,38 @@ def run_phase4_update():
     logger.info("=== Phase4 采集结束 ===")
 
 
+def run_phase1_update():
+    """Phase 1 增量: 北向 + 融资融券 + 龙虎榜 + 概念板块 + 股东户数"""
+    config = load_config()
+    logger.info("=== Phase1 采集开始 ===")
+    pipeline = Pipeline(config)
+    try:
+        logger.info("采集北向资金...")
+        n = pipeline.update_northbound()
+        logger.info(f"  北向: {n} 条")
+
+        logger.info("采集融资融券...")
+        n = pipeline.update_margin_trading("A")
+        logger.info(f"  融资融券: {n} 条")
+
+        logger.info("采集龙虎榜...")
+        n = pipeline.update_dragon_tiger("A")
+        logger.info(f"  龙虎榜: {n} 条")
+
+        logger.info("更新概念板块归属...")
+        n = pipeline.update_concept_blocks("A")
+        logger.info(f"  概念板块: {n} 条")
+
+        logger.info("采集股东户数...")
+        n = pipeline.update_holder_num("A")
+        logger.info(f"  股东户数: {n} 条")
+    except Exception as e:
+        logger.error(f"Phase1 异常: {e}")
+    finally:
+        pipeline.close()
+    logger.info("=== Phase1 采集结束 ===")
+
+
 def main():
     config = load_config()
     setup_logger(config)
@@ -83,7 +115,9 @@ def main():
 
     logger.info(f"调度器启动: 每天 {run_time} 更新 {markets}")
     schedule.every().day.at(run_time).do(run_update, markets=markets)
+    schedule.every().day.at("16:10").do(run_phase1_update)
     schedule.every().day.at("16:30").do(run_phase4_update)
+    logger.info("  Phase1(北向/融资/龙虎榜/板块/股东): 每天 16:10")
     logger.info("  Phase4(资金流/研报/财报): 每天 16:30")
 
     # 立即跑一次（可选）

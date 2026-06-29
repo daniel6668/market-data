@@ -1,5 +1,6 @@
 """ETL Pipeline — 编排数据采集全流程"""
 import logging
+import socket
 import time
 from datetime import datetime, timedelta
 
@@ -14,7 +15,8 @@ from .db import (
 from .sources.tushare import TushareSource
 from .sources.akshare import AKShareSource
 from .sources.yfinance import YFinanceSource
-from .utils import load_config, setup_logger
+from .utils import load_config, setup_logger, TradingCalendar
+from .validator import validate_daily
 
 
 logger = logging.getLogger("market_data")
@@ -31,10 +33,18 @@ class Pipeline:
         self.max_retries = self.config["retry"]["max_attempts"]
         self.backoff = self.config["retry"]["backoff_base"]
 
+        # 全局网络超时：防止 AKShare/yfinance 请求无限等待
+        socket.setdefaulttimeout(60)
+
         # 懒加载数据源
         self._ts = None
         self._ak = None
         self._yf = None
+        self._mdx = None      # mootdx (A 股日线首选)
+        self._tc = None       # Tencent (PE/PB/市值)
+
+        # 加载交易日历（如果数据库有数据，否则 fallback 到周末检查）
+        TradingCalendar.load_from_db(self.conn)
 
     @property
     def ts(self) -> TushareSource:
@@ -53,6 +63,26 @@ class Pipeline:
         if self._yf is None:
             self._yf = YFinanceSource(self.config)
         return self._yf
+
+    @property
+    def mdx(self):
+        """mootdx 数据源 — A 股日线首选（不限频、零 Token）"""
+        if self._mdx is None:
+            from .sources.mootdx_source import MootdxSource
+            try:
+                self._mdx = MootdxSource()
+            except RuntimeError as e:
+                self.logger.warning(f"mootdx 不可用: {e}, 将使用 Tushare")
+                self._mdx = None
+        return self._mdx
+
+    @property
+    def tc(self):
+        """腾讯财经数据源 — PE/PB/市值（不限频、零 Token）"""
+        if self._tc is None:
+            from .sources.tencent_source import TencentSource
+            self._tc = TencentSource()
+        return self._tc
 
     def init_market(self, market: str) -> dict:
         """初始化一个市场：拉股票列表 + 全部历史数据
@@ -90,9 +120,12 @@ class Pipeline:
                     rows = self._fetch_daily_with_retry(market, ts_code,
                                                         self.start_date,
                                                         datetime.now().strftime("%Y-%m-%d"))
+                    if rows > 0:
+                        success += 1
+                    else:
+                        failed += 1
                     progress.update(task, advance=1,
                                    description=f"[cyan]{ts_code} ({success+failed+1}/{total})")
-                    success += 1
                 except Exception as e:
                     self.logger.error(f"失败 {ts_code}: {e}")
                     record_sync_error(self.conn, ts_code, market, str(e))
@@ -125,11 +158,20 @@ class Pipeline:
             for _, row in stocks.iterrows():
                 ts_code = row["ts_code"]
                 last_sync = row.get("last_sync")
-                start = (last_sync + timedelta(days=1)).strftime("%Y-%m-%d") if last_sync else self.start_date
+                if last_sync is None or pd.isna(last_sync):
+                    start = self.start_date
+                else:
+                    # 兜底：如果 DuckDB 返回字符串，先转 date
+                    if isinstance(last_sync, str):
+                        last_sync = pd.to_datetime(last_sync).date()
+                    start = (last_sync + timedelta(days=1)).strftime("%Y-%m-%d")
 
                 try:
                     rows = self._fetch_daily_with_retry(market, ts_code, start, today)
-                    success += 1
+                    if rows > 0:
+                        success += 1
+                    else:
+                        failed += 1
                 except Exception as e:
                     self.logger.error(f"更新失败 {ts_code}: {e}")
                     record_sync_error(self.conn, ts_code, market, str(e))
@@ -157,7 +199,10 @@ class Pipeline:
             for ts_code in codes:
                 try:
                     rows = self._fetch_daily_with_retry(market, ts_code, start, end)
-                    success += 1
+                    if rows > 0:
+                        success += 1
+                    else:
+                        failed += 1
                 except Exception as e:
                     failed += 1
                     errors.append({"ts_code": ts_code, "error": str(e)})
@@ -183,20 +228,32 @@ class Pipeline:
             # 补全 ts_code 后缀
             def add_suffix(code):
                 code = str(code).zfill(6)
-                if code.startswith(('0','3')): return code + '.SZ'
-                if code.startswith('6'): return code + '.SH'
-                if code.startswith('4'): return code + '.BJ'
-                if code.startswith('8'): return code + '.BJ'
-                return code + '.SZ'
+                if code.startswith('688'): return code + '.SH'  # 科创板
+                if code.startswith('8'): return code + '.BJ'    # 北交所 8xxx
+                if code.startswith('4'): return code + '.BJ'    # 北交所 4xxx
+                if code.startswith('6'): return code + '.SH'    # 上证主板
+                return code + '.SZ'  # 0/2/3 → 深交所
             df["ts_code"] = df["ts_code"].apply(add_suffix)
             df["exchange"] = df["ts_code"].str.split(".").str[1]
             df["list_status"] = "L"
             df["is_hs"] = None
             return df
         elif market == "HK":
-            df = self.ts.get_stock_list("HK")
+            try:
+                df = self.ts.get_stock_list("HK")
+                if not df.empty:
+                    return df
+            except Exception as e:
+                self.logger.warning(f"Tushare HK 列表失败, 用 AKShare 替代: {e}")
+            df = self.ak.get_hk_stock_list()
         elif market == "ETF":
-            df = self.ak.get_etf_list()
+            try:
+                df = self.ak.get_etf_list()
+                if not df.empty:
+                    return df
+            except Exception as e:
+                self.logger.warning(f"AKShare ETF 列表失败: {e}")
+            return pd.DataFrame()
         elif market == "US":
             df = self.yf.get_us_stock_list()
         else:
@@ -209,66 +266,109 @@ class Pipeline:
 
         Returns: 写入行数
         """
-        import time
         last_error = None
 
         for attempt in range(self.max_retries):
             try:
-                df = self._fetch_daily(market, ts_code, start, end)
-                if df.empty:
+                data = self._fetch_daily(market, ts_code, start, end)
+                daily_df = data["daily"]
+                if daily_df.empty:
+                    return 0
+
+                # 数据校验：写入前检查行数/空值/日期连续性
+                validation = validate_daily(daily_df, ts_code)
+                if not validation["valid"]:
+                    self.logger.warning(f"数据校验失败 {ts_code}: {validation['issues']}")
                     return 0
 
                 table = self._daily_table(market)
-                rows = upsert_daily(self.conn, table, df)
+                # 事务写入：daily + extra 表原子性
+                self.conn.execute("BEGIN TRANSACTION")
+                try:
+                    rows = upsert_daily(self.conn, table, daily_df)
+                    for extra_table, extra_df in data.get("extra", []):
+                        if not extra_df.empty:
+                            upsert_daily(self.conn, extra_table, extra_df)
+                    self.conn.execute("COMMIT")
+                except Exception:
+                    self.conn.execute("ROLLBACK")
+                    raise
 
-                # 更新 sync_status
-                max_date = df["trade_date"].max()
-                update_sync_status(self.conn, ts_code, market, str(max_date), len(df))
+                # 更新 sync_status（事务外，独立于数据写入）
+                max_date = daily_df["trade_date"].max()
+                update_sync_status(self.conn, ts_code, market, str(max_date), len(daily_df))
                 return rows
 
             except Exception as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    wait = self.backoff * (2 ** attempt)
-                    self.logger.warning(f"重试 {attempt+1}/{self.max_retries} for {ts_code}. 等待 {wait}s...")
+                    msg = str(e)
+                    is_rate_limit = any(kw in msg for kw in
+                                        ["频率超限", "Rate", "Too Many", "limit"])
+                    if is_rate_limit:
+                        wait = 60  # 限流错误等待一个完整周期
+                    else:
+                        wait = self.backoff * (2 ** attempt)
+                    self.logger.warning(f"重试 {attempt+1}/{self.max_retries} for {ts_code}. "
+                                        f"等待 {wait}s... ({'限流' if is_rate_limit else '错误'})")
                     time.sleep(wait)
 
         raise last_error or Exception(f"Max retries exceeded for {ts_code}")
 
-    def _fetch_daily(self, market: str, ts_code: str, start: str, end: str) -> pd.DataFrame:
-        """根据市场拉取日线"""
+    def _fetch_daily(self, market: str, ts_code: str,
+                     start: str, end: str) -> dict:
+        """根据市场拉取日线
+
+        Returns: {"daily": DataFrame, "extra": [(table_name, DataFrame), ...]}
+        extra 中的 DataFrame 由调用方在同一事务中写入。
+        """
         if market == "A":
-            df = self.ts.get_daily(ts_code, start, end)
+            # A 股日线：mootdx 优先（不限频），失败时降级到 Tushare
+            df = pd.DataFrame()
+            mdx = self.mdx
+            if mdx is not None:
+                df = mdx.get_daily(ts_code, start, end)
+            if df.empty:
+                df = self.ts.get_daily(ts_code, start, end)
             if not df.empty:
                 df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-            # 同时拉基本面和复权因子
+            extra = []
+            # 基本面：尝试腾讯财经（实时数据），fallback 到 Tushare
             try:
-                basic = self.ts.get_daily_basic(ts_code, start, end)
+                basic = self.tc.get_daily_basic(ts_code)
+                if basic.empty:
+                    basic = self.ts.get_daily_basic(ts_code, start, end)
                 if not basic.empty:
                     basic["trade_date"] = pd.to_datetime(basic["trade_date"]).dt.date
-                    upsert_daily(self.conn, "a_daily_basic", basic)
+                    extra.append(("a_daily_basic", basic))
             except Exception as e:
-                self.logger.debug(f"daily_basic 拉取失败 {ts_code}: {e}")
+                try:
+                    basic = self.ts.get_daily_basic(ts_code, start, end)
+                    if not basic.empty:
+                        basic["trade_date"] = pd.to_datetime(basic["trade_date"]).dt.date
+                        extra.append(("a_daily_basic", basic))
+                except Exception:
+                    self.logger.debug(f"daily_basic 拉取失败 {ts_code}: {e}")
             try:
                 adj = self.ts.get_adj_factor(ts_code, start, end)
                 if not adj.empty:
                     adj["trade_date"] = pd.to_datetime(adj["trade_date"]).dt.date
-                    upsert_daily(self.conn, "a_adj_factor", adj)
+                    extra.append(("a_adj_factor", adj))
             except Exception as e:
                 self.logger.debug(f"adj_factor 拉取失败 {ts_code}: {e}")
-            return df
+            return {"daily": df, "extra": extra}
 
         elif market == "ETF":
-            return self.ak.get_etf_daily(ts_code, start, end)
+            return {"daily": self.ak.get_etf_daily(ts_code, start, end), "extra": []}
 
         elif market == "HK":
             df = self.ts.get_hk_daily(ts_code, start, end)
             if not df.empty:
                 df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-            return df
+            return {"daily": df, "extra": []}
 
         elif market == "US":
-            return self.yf.get_us_daily(ts_code, start, end)
+            return {"daily": self.yf.get_us_daily(ts_code, start, end), "extra": []}
 
         else:
             raise ValueError(f"Unknown market: {market}")

@@ -14,6 +14,9 @@
   python cli.py dragon       ← 龙虎榜
   python cli.py blocks       ← 概念板块归属
   python cli.py holders      ← 股东户数
+  python cli.py factors      ← 全市场因子计算
+  python cli.py screen       ← 条件选股 (--pe 30 --rsi 35)
+  python cli.py backtest     ← 快速回测 (--code 600519)
 """
 import sys
 from src.pipeline import Pipeline
@@ -163,6 +166,74 @@ def cmd_holders(args):
         pipeline.close()
 
 
+def cmd_factors(args):
+    """计算今日因子"""
+    from src.factors.engine import FactorEngine
+    from src.db import get_connection
+    from src.utils import load_config
+    config = load_config()
+    conn = get_connection(config)
+    try:
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        engine = FactorEngine(conn)
+        n = engine.compute_all(today)
+        print(f"因子计算完成: {n} 只")
+    finally:
+        conn.close()
+
+
+def cmd_screen(args):
+    """条件选股"""
+    from src.screening.screener import StockScreener
+    from src.db import get_connection
+    from src.utils import load_config
+    config = load_config()
+    conn = get_connection(config)
+    try:
+        screener = StockScreener(conn)
+        conditions = []
+        if "pe" in args:
+            conditions.append({"factor": "pe_ttm", "op": "lt", "value": float(args["pe"])})
+        if "rsi" in args:
+            conditions.append({"factor": "rsi14", "op": "lt", "value": float(args["rsi"])})
+        if not conditions:
+            print("请指定筛选条件，如: python cli.py screen --pe 30 --rsi 35")
+            return
+        df = screener.by_conditions(conditions)
+        if df.empty:
+            print("无匹配结果")
+        else:
+            print(f"筛选结果 ({len(df)} 只):")
+            print(df.to_string(index=False))
+    finally:
+        conn.close()
+
+
+def cmd_backtest(args):
+    """快速回测"""
+    from src.backtest.runner import BacktestRunner
+    from src.db import get_connection
+    from src.utils import load_config
+    config = load_config()
+    conn = get_connection(config)
+    try:
+        runner = BacktestRunner(conn)
+        code = args.get("code", "600519")
+        start = args.get("start", "2025-01-01")
+        end = args.get("end", "2026-06-29")
+        prices = runner._load_prices(code, start, end)
+        if prices.empty:
+            print(f"{code}: 无数据")
+            return
+        ma20 = prices.rolling(20).mean()
+        ma60 = prices.rolling(60).mean()
+        result = runner.run_single(code, ma20 > ma60, ma20 < ma60, start, end)
+        print(f"{code} 均线交叉回测: {result.summary()}")
+    finally:
+        conn.close()
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -205,6 +276,9 @@ def main():
         "dragon": cmd_dragon,
         "blocks": cmd_blocks,
         "holders": cmd_holders,
+        "factors": cmd_factors,
+        "screen": cmd_screen,
+        "backtest": cmd_backtest,
     }
     
     if cmd not in commands:

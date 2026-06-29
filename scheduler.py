@@ -94,6 +94,26 @@ def run_phase1_update():
     logger.info("=== Phase1 采集结束 ===")
 
 
+def run_factors_update():
+    """收盘后因子重算"""
+    config = load_config()
+    logger.info("=== 因子重算开始 ===")
+    from src.factors.engine import FactorEngine
+    from src.db import get_connection
+    conn = get_connection(config)
+    try:
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        engine = FactorEngine(conn)
+        n = engine.compute_all(today)
+        logger.info(f"  因子计算: {n} 只")
+    except Exception as e:
+        logger.error(f"因子重算异常: {e}")
+    finally:
+        conn.close()
+    logger.info("=== 因子重算结束 ===")
+
+
 def main():
     config = load_config()
     setup_logger(config)
@@ -115,8 +135,10 @@ def main():
 
     logger.info(f"调度器启动: 每天 {run_time} 更新 {markets}")
     schedule.every().day.at(run_time).do(run_update, markets=markets)
+    schedule.every().day.at("16:00").do(run_factors_update)
     schedule.every().day.at("16:10").do(run_phase1_update)
     schedule.every().day.at("16:30").do(run_phase4_update)
+    logger.info("  Phase2(因子重算): 每天 16:00")
     logger.info("  Phase1(北向/融资/龙虎榜/板块/股东): 每天 16:10")
     logger.info("  Phase4(资金流/研报/财报): 每天 16:30")
 

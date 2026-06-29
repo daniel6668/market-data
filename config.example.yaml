@@ -47,3 +47,11 @@ retry:
 logging:
   level: "INFO"
   file: "data/pipeline.log"
+
+# LLM 配置（Phase 3: AI Chat）
+# 支持: deepseek / glm / openai / lmstudio
+llm:
+  provider: "deepseek"              # deepseek | glm | openai | lmstudio
+  api_key: ""                        # 填入你的 API Key
+  model: "deepseek-chat"            # 或 glm-4-flash / gpt-4o-mini
+  base_url: ""                      # 留空自动使用 provider 默认 URL

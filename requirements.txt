@@ -1,12 +1,17 @@
 PyYAML==6.0.3
 akshare==1.18.64
 duckdb==1.5.4
+gradio>=4.0
 mootdx==0.11.7
+openai>=1.0
 pandas==3.0.3
+plotly>=5.0
+pytest-timeout>=2.0
 requests-oauthlib==2.0.0
 requests==2.33.0
 rich==14.3.3
 schedule==1.2.2
 stockstats==0.6.8
 tushare==1.4.29
+vectorbt>=0.5
 yfinance==1.4.1

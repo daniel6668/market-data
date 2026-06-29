@@ -167,6 +167,98 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             PRIMARY KEY (ts_code, period, rpt_type)
         )
     """)
+    # ── Phase 1: 数据补全 8 张新表 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS northbound_flow (
+            date    DATE PRIMARY KEY,
+            hgt_yi  DOUBLE,
+            sgt_yi  DOUBLE
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS margin_trading (
+            ts_code    VARCHAR NOT NULL,
+            trade_date DATE NOT NULL,
+            rzye       DOUBLE,
+            rzmre      DOUBLE,
+            rzche      DOUBLE,
+            rqye       DOUBLE,
+            rqmcl      DOUBLE,
+            rqchl      DOUBLE,
+            rzrqye     DOUBLE,
+            PRIMARY KEY (ts_code, trade_date)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dragon_tiger (
+            ts_code      VARCHAR NOT NULL,
+            trade_date   DATE NOT NULL,
+            reason       VARCHAR,
+            net_buy_wan  DOUBLE,
+            turnover_pct DOUBLE,
+            close        DOUBLE,
+            change_pct   DOUBLE,
+            buy_seats    TEXT,
+            sell_seats   TEXT,
+            PRIMARY KEY (ts_code, trade_date)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS block_trade (
+            ts_code     VARCHAR NOT NULL,
+            trade_date  DATE NOT NULL,
+            deal_price  DOUBLE,
+            close       DOUBLE,
+            premium_pct DOUBLE,
+            deal_vol    DOUBLE,
+            deal_amt    DOUBLE,
+            buyer       VARCHAR,
+            seller      VARCHAR,
+            PRIMARY KEY (ts_code, trade_date, deal_price)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS holder_num (
+            ts_code          VARCHAR NOT NULL,
+            end_date         DATE NOT NULL,
+            holder_num       INTEGER,
+            change_num       INTEGER,
+            change_ratio_pct DOUBLE,
+            avg_free_shares  DOUBLE,
+            PRIMARY KEY (ts_code, end_date)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dividend (
+            ts_code        VARCHAR NOT NULL,
+            ex_date        DATE NOT NULL,
+            bonus_rmb      DOUBLE,
+            transfer_ratio DOUBLE,
+            bonus_ratio    DOUBLE,
+            plan           VARCHAR,
+            PRIMARY KEY (ts_code, ex_date)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS lockup_expiry (
+            ts_code     VARCHAR NOT NULL,
+            free_date   DATE NOT NULL,
+            stock_type  VARCHAR,
+            free_shares DOUBLE,
+            free_ratio  DOUBLE,
+            PRIMARY KEY (ts_code, free_date)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_boards (
+            ts_code     VARCHAR NOT NULL,
+            board_name  VARCHAR NOT NULL,
+            board_code  VARCHAR,
+            change_pct  DOUBLE,
+            lead_stock  VARCHAR,
+            PRIMARY KEY (ts_code, board_name)
+        )
+    """)
 
 
 def upsert_daily(conn: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame) -> int:

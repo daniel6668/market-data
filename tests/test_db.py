@@ -56,3 +56,47 @@ def test_sync_status():
     assert len(df) == 1
     assert str(df.iloc[0]["last_sync"].date()) == "2024-06-01"
     assert df.iloc[0]["row_count"] == 500
+
+
+def test_phase1_tables_exist():
+    """验证 Phase 1 的 8 张新表存在"""
+    from src.db import create_tables
+    import duckdb
+    conn = duckdb.connect(":memory:")
+    create_tables(conn)
+    tables = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()
+    names = {t[0] for t in tables}
+    expected_phase1 = {
+        "northbound_flow", "margin_trading", "dragon_tiger",
+        "block_trade", "holder_num", "dividend",
+        "lockup_expiry", "stock_boards",
+    }
+    missing = expected_phase1 - names
+    assert not missing, f"Missing tables: {missing}"
+
+
+def test_margin_trading_upsert():
+    """验证融资融券表 upsert"""
+    from src.db import create_tables, upsert_daily
+    import duckdb
+    conn = duckdb.connect(":memory:")
+    create_tables(conn)
+    df = pd.DataFrame({
+        "ts_code": ["600519.SH"],
+        "trade_date": ["2026-06-29"],
+        "rzye": [1.5e9],
+        "rzmre": [2e8],
+        "rzche": [1e8],
+        "rqye": [5e7],
+        "rqmcl": [10000],
+        "rqchl": [8000],
+        "rzrqye": [1.55e9],
+    })
+    count = upsert_daily(conn, "margin_trading", df)
+    assert count == 1
+    row = conn.execute(
+        "SELECT rzye FROM margin_trading WHERE ts_code='600519.SH'"
+    ).fetchone()
+    assert row[0] == 1.5e9

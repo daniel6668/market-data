@@ -34,9 +34,14 @@ def respond(message, history):
     client = get_client(config)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    # Gradio 6.0: history 是 list of {"role":..., "content":...} dicts
+    # 兼容新旧 Gradio 的 history 格式
     for h in history:
-        messages.append(h)
+        if isinstance(h, dict):
+            messages.append(h)
+        elif isinstance(h, (list, tuple)) and len(h) >= 2:
+            messages.append({"role": "user", "content": str(h[0])})
+            if h[1]:
+                messages.append({"role": "assistant", "content": str(h[1])})
     messages.append({"role": "user", "content": message})
 
     try:
@@ -89,7 +94,6 @@ def create_ui():
         with gr.Tab("💬 对话"):
             gr.ChatInterface(
                 respond,
-                type="messages",
                 examples=["帮我找 PE<30 的股票", "分析一下 600519", "今天市场怎么样？"],
             )
         with gr.Tab("⭐ 自选池"):

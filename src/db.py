@@ -259,6 +259,24 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             PRIMARY KEY (ts_code, board_name)
         )
     """)
+    # ── Phase 2: 因子表 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_factors (
+            ts_code    VARCHAR NOT NULL,
+            trade_date DATE NOT NULL,
+            ma5 DOUBLE, ma10 DOUBLE, ma20 DOUBLE, ma60 DOUBLE,
+            ema12 DOUBLE, ema26 DOUBLE,
+            macd_dif DOUBLE, macd_dea DOUBLE, macd_bar DOUBLE,
+            ret_5d DOUBLE, ret_10d DOUBLE, ret_20d DOUBLE,
+            rsi6 DOUBLE, rsi14 DOUBLE,
+            atr14 DOUBLE,
+            boll_upper DOUBLE, boll_mid DOUBLE, boll_lower DOUBLE,
+            vol_ratio DOUBLE, avg_vol_5d DOUBLE, avg_vol_20d DOUBLE,
+            main_net_5d DOUBLE, main_net_10d DOUBLE, main_net_20d DOUBLE,
+            pe_ttm DOUBLE, pb DOUBLE, turnover_rate DOUBLE,
+            PRIMARY KEY (ts_code, trade_date)
+        )
+    """)
 
 
 def upsert_daily(conn: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame) -> int:

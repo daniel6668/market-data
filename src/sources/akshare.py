@@ -2,9 +2,10 @@
 import akshare as ak
 import pandas as pd
 from ..utils import RateLimiter
+from .base import DataSource
 
 
-class AKShareSource:
+class AKShareSource(DataSource):
     """封装 AKShare API，内置限速"""
     
     def __init__(self, config: dict):
@@ -64,4 +65,22 @@ class AKShareSource:
             result["ts_code"] = df["code"]
             result["name"] = df["name"]
             result["market"] = "A"
+        return result
+
+    def get_hk_stock_list(self) -> pd.DataFrame:
+        """获取港股列表（作为 Tushare 的备选）"""
+        self._wait()
+        df = ak.stock_hk_spot_em()
+        result = pd.DataFrame()
+        if not df.empty:
+            result["ts_code"] = df["代码"].astype(str) + ".HK"
+            result["name"] = df["名称"]
+            result["market"] = "HK"
+            result["list_date"] = None
+            result["delist_date"] = None
+            result["industry"] = None
+            result["area"] = "HK"
+            result["exchange"] = "HKEX"
+            result["is_hs"] = None
+            result["list_status"] = "L"
         return result

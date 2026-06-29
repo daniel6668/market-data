@@ -2,6 +2,7 @@
 import yfinance as yf
 import pandas as pd
 from ..utils import RateLimiter
+from .base import DataSource
 
 
 # 常见美股列表（SP500 主要成分作为种子，可扩展）
@@ -17,12 +18,20 @@ DEFAULT_US_SYMBOLS = [
 ]
 
 
-class YFinanceSource:
+class YFinanceSource(DataSource):
     """封装 yfinance API，内置限速"""
     
     def __init__(self, config: dict):
         rl_cfg = config["rate_limit"]["yfinance"]
         self.limiter = RateLimiter(max_calls=rl_cfg["max_calls"], period=rl_cfg["period"])
+
+    def get_stock_list(self, market: str = "US") -> pd.DataFrame:
+        """DataSource 接口实现 — 代理到 get_us_stock_list"""
+        return self.get_us_stock_list()
+
+    def get_daily(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """DataSource 接口实现 — 代理到 get_us_daily"""
+        return self.get_us_daily(ts_code, start_date, end_date)
 
     def get_us_stock_list(self) -> pd.DataFrame:
         """获取美股列表（默认符号列表）"""

@@ -3,6 +3,7 @@ import time
 import logging
 import yaml
 from pathlib import Path
+from typing import Any
 from typing import Optional
 
 
@@ -37,12 +38,44 @@ class RateLimiter:
 
 
 class TradingCalendar:
-    """简易交易日历 — 判断某天是否为交易日"""
-    
-    A_HOLIDAY_MONTHS = {1, 2, 5, 10}
-    HK_HOLIDAY_MONTHS = {1, 2, 4, 5, 6, 7, 9, 10, 12}
-    US_HOLIDAY_MONTHS = {1, 2, 5, 7, 9, 11, 12}
-    
+    """交易日历 — 判断某天是否为交易日
+
+    优先使用从数据库加载的精确交易日历（含节假日），
+    未加载时 fallback 到周末检查。
+    """
+
+    _trading_days: set = set()  # 类级缓存：所有交易日的字符串集合
+
+    @classmethod
+    def load_from_db(cls, conn: Any, exchange: str = "SSE") -> int:
+        """从数据库加载交易日历到内存"""
+        try:
+            rows = conn.execute(
+                "SELECT cal_date FROM trade_calendar "
+                "WHERE exchange = ? AND is_open = True",
+                [exchange]
+            ).fetchall()
+            cls._trading_days = {str(r[0]) for r in rows}
+            return len(cls._trading_days)
+        except Exception:
+            return 0
+
+    @classmethod
+    def ensure_calendar(cls, conn: Any, ts_source: Any = None,
+                        exchange: str = "SSE") -> None:
+        """确保交易日历已加载。数据库无数据时尝试从 Tushare 拉取。"""
+        from .db import has_trade_calendar, save_trade_calendar
+        if not has_trade_calendar(conn, exchange):
+            if ts_source is None:
+                return
+            try:
+                df = ts_source.get_trade_calendar(exchange=exchange)
+                if not df.empty:
+                    save_trade_calendar(conn, df)
+            except Exception:
+                pass  # 拉取失败，fallback 到周末检查
+        cls.load_from_db(conn, exchange)
+
     @staticmethod
     def is_weekend(date_str: str) -> bool:
         """判断是否为周末"""
@@ -52,8 +85,11 @@ class TradingCalendar:
 
     @classmethod
     def is_trading_day(cls, market: str, date_str: str) -> bool:
-        """简易交易日判断：排除周末。精确日历由数据源保证（非交易日无数据）。"""
-        return not cls.is_weekend(date_str)
+        """判断是否为交易日。优先用数据库日历，fallback 到周末检查。"""
+        ds = str(date_str)[:10]
+        if cls._trading_days:
+            return ds in cls._trading_days
+        return not cls.is_weekend(ds)
 
 
 def load_config(config_path: str = "config.yaml") -> dict:

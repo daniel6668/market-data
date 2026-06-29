@@ -32,21 +32,27 @@ def cmd_init(args):
 
 def cmd_update(args):
     pipeline = Pipeline()
-    markets = args.get("market", "all")
-    if markets == "all":
-        markets = ["A", "ETF", "HK", "US"]
-    else:
-        markets = [markets]
-    
-    for m in markets:
-        result = pipeline.update_market(m)
-        print(f"[{m}] 需要更新: {result['total']}, 成功: {result['success']}, 失败: {result['failed']}")
+    try:
+        markets = args.get("market", "all")
+        if markets == "all":
+            markets = ["A", "ETF", "HK", "US"]
+        else:
+            markets = [markets]
+
+        for m in markets:
+            result = pipeline.update_market(m)
+            print(f"[{m}] 需要更新: {result['total']}, 成功: {result['success']}, 失败: {result['failed']}")
+    finally:
+        pipeline.close()
 
 
 def cmd_backfill(args):
     pipeline = Pipeline()
-    result = pipeline.backfill_market(args["market"], args["start"], args["end"])
-    print(f"回补完成 — 总计: {result['total']}, 成功: {result['success']}, 失败: {result['failed']}")
+    try:
+        result = pipeline.backfill_market(args["market"], args["start"], args["end"])
+        print(f"回补完成 — 总计: {result['total']}, 成功: {result['success']}, 失败: {result['failed']}")
+    finally:
+        pipeline.close()
 
 
 def cmd_status(args):

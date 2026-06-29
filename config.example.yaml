@@ -1,7 +1,7 @@
-# 市场数据采集配置
-# 在下方填入 Tushare token 即可（config.yaml 已被 .gitignore 排除，不会进入版本控制）
+# 市场数据采集配置 — 模板文件
+# 复制为 config.yaml 并填入真实 token，或通过环境变量 TUSHARE_TOKEN 设置
 tushare:
-  token: "d98706c9f69f0ec43109956d7213b0afb8fbd1facd5bef341da274f2"
+  token: ""
 
 database:
   path: "data/market.duckdb"

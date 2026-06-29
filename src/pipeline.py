@@ -10,7 +10,8 @@ from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 from .db import (
     get_connection, update_stock_info, upsert_daily,
     update_sync_status, record_sync_error,
-    get_stocks_needing_update
+    get_stocks_needing_update,
+    upsert_fund_flow, upsert_research_reports, upsert_financial_reports,
 )
 from .sources.tushare import TushareSource
 from .sources.akshare import AKShareSource
@@ -399,6 +400,59 @@ class Pipeline:
             "HK": "hk_daily",
             "US": "us_daily",
         }[market]
+
+    # ── Phase 4: 增量数据采集 ──
+
+    def update_fund_flow(self, market: str = "A") -> int:
+        """采集全市场日级资金流向（push2his）"""
+        if market != "A":
+            return 0
+        stocks = get_stocks_needing_update(self.conn, market, "2024-01-01")
+        total = 0
+        for _, row in stocks.iterrows():
+            code = row["ts_code"]
+            df = self.em.get_fund_flow(code, days=120)
+            if not df.empty:
+                upsert_fund_flow(self.conn, df)
+                total += len(df)
+            if total % 50000 == 0:
+                self.logger.info(f"  资金流: {total} 条")
+        self.logger.info(f"资金流采集完成: {total} 条")
+        return total
+
+    def update_research(self, market: str = "A") -> int:
+        """采集研报数据（reportapi）"""
+        if market != "A":
+            return 0
+        stocks = get_stocks_needing_update(self.conn, market, "2024-01-01")
+        total = 0
+        for _, row in stocks.iterrows():
+            code = row["ts_code"]
+            df = self.em.get_reports(code, max_pages=3)
+            if not df.empty:
+                upsert_research_reports(self.conn, df)
+                total += len(df)
+            if total % 500 == 0:
+                self.logger.info(f"  研报: {total} 篇")
+        self.logger.info(f"研报采集完成: {total} 篇")
+        return total
+
+    def update_financials(self, market: str = "A") -> int:
+        """采集财报三表（新浪）"""
+        if market != "A":
+            return 0
+        stocks = get_stocks_needing_update(self.conn, market, "2024-01-01")
+        total = 0
+        for rpt_type, name in [("lrb", "利润表"), ("fzb", "资产负债表"), ("llb", "现金流")]:
+            for _, row in stocks.iterrows():
+                code = row["ts_code"]
+                df = self.sina.get_financial_report(code, rpt_type, num_periods=4)
+                if not df.empty:
+                    df["rpt_type"] = name
+                    upsert_financial_reports(self.conn, df)
+                    total += len(df)
+            self.logger.info(f"  {name}: {total} 期")
+        return total
 
     def close(self):
         """关闭数据库连接"""

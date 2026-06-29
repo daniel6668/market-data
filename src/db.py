@@ -123,12 +123,58 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             PRIMARY KEY (ts_code, market)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trade_calendar (
+            cal_date  DATE NOT NULL,
+            is_open   BOOLEAN NOT NULL,
+            exchange  VARCHAR DEFAULT 'SSE',
+            PRIMARY KEY (cal_date, exchange)
+        )
+    """)
+    # Phase 4 新增表
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_fund_flow (
+            ts_code    VARCHAR NOT NULL,
+            trade_date DATE NOT NULL,
+            main_net   DOUBLE,
+            small_net  DOUBLE,
+            mid_net    DOUBLE,
+            large_net  DOUBLE,
+            super_net  DOUBLE,
+            main_pct   DOUBLE,
+            PRIMARY KEY (ts_code, trade_date)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS research_reports (
+            info_code   VARCHAR PRIMARY KEY,
+            ts_code     VARCHAR NOT NULL,
+            publish_date DATE,
+            org_name    VARCHAR,
+            title       TEXT,
+            eps_2026    DOUBLE,
+            eps_2027    DOUBLE,
+            eps_2028    DOUBLE,
+            rating      VARCHAR
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS financial_reports (
+            ts_code  VARCHAR NOT NULL,
+            period   VARCHAR NOT NULL,
+            rpt_type VARCHAR NOT NULL,
+            data     TEXT,         -- JSON 存储各行项
+            PRIMARY KEY (ts_code, period, rpt_type)
+        )
+    """)
 
 
 def upsert_daily(conn: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame) -> int:
     """批量插/更新日线数据。返回实际写入行数。"""
     if df.empty:
         return 0
+    # 不修改传入的 DataFrame，避免副作用
+    df = df.copy()
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
     conn.register("_tmp_upsert", df)
@@ -137,13 +183,16 @@ def upsert_daily(conn: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame) 
     try:
         conn.execute(f"INSERT OR REPLACE INTO {table} ({cols}) SELECT * FROM _tmp_upsert")
     except Exception:
+        # fallback: DELETE + INSERT，用临时表避免 SQL 拼接
         pk_cols = ["ts_code", "trade_date"]
         if all(c in df.columns for c in pk_cols):
-            codes = df["ts_code"].unique().tolist()
-            dates = df["trade_date"].unique().tolist()
-            codes_str = ", ".join([f"'{c}'" for c in codes])
-            dates_str = ", ".join([f"'{d}'" for d in dates])
-            conn.execute(f"DELETE FROM {table} WHERE ts_code IN ({codes_str}) AND trade_date IN ({dates_str})")
+            conn.register("_tmp_del_keys", df[pk_cols].drop_duplicates())
+            conn.execute(
+                f"DELETE FROM {table} WHERE ts_code IN "
+                f"(SELECT ts_code FROM _tmp_del_keys) AND trade_date IN "
+                f"(SELECT trade_date FROM _tmp_del_keys)"
+            )
+            conn.unregister("_tmp_del_keys")
         conn.execute(f"INSERT INTO {table} ({cols}) SELECT * FROM _tmp_upsert")
     conn.unregister("_tmp_upsert")
     return len(df)
@@ -171,11 +220,19 @@ def get_sync_status(conn: duckdb.DuckDBPyConnection, market: str) -> pd.DataFram
 def update_sync_status(conn: duckdb.DuckDBPyConnection,
                        ts_code: str, market: str,
                        last_date: str, rows: int) -> None:
-    """更新单只股票的同步状态"""
+    """更新单只股票的同步状态
+
+    首次同步时设置 first_date = last_date；后续只更新 last_sync/row_count，
+    不影响 first_date/error_count/last_error。
+    """
     conn.execute("""
-        INSERT OR REPLACE INTO sync_status (ts_code, market, last_sync, row_count, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    """, [ts_code, market, last_date, rows])
+        INSERT INTO sync_status (ts_code, market, last_sync, first_date, row_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, now())
+        ON CONFLICT (ts_code, market) DO UPDATE SET
+            last_sync = excluded.last_sync,
+            row_count = excluded.row_count,
+            updated_at = now()
+    """, [ts_code, market, last_date, last_date, rows])
 
 
 def record_sync_error(conn: duckdb.DuckDBPyConnection,
@@ -202,3 +259,85 @@ def get_stocks_needing_update(conn: duckdb.DuckDBPyConnection,
           AND error_count < ?
         ORDER BY last_sync NULLS FIRST
     """, [market, start_date, max_errors]).fetchdf()
+
+
+def save_trade_calendar(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
+    """批量写入交易日历数据"""
+    if df.empty:
+        return 0
+    df = df.copy()
+    if "cal_date" in df.columns:
+        df["cal_date"] = pd.to_datetime(df["cal_date"]).dt.date
+    conn.register("_tmp_cal", df)
+    conn.execute("INSERT OR REPLACE INTO trade_calendar SELECT * FROM _tmp_cal")
+    conn.unregister("_tmp_cal")
+    return len(df)
+
+
+def get_trading_days(conn: duckdb.DuckDBPyConnection,
+                     start_date: str, end_date: str,
+                     exchange: str = "SSE") -> list:
+    """查询交易日列表"""
+    return [str(r[0]) for r in conn.execute(
+        "SELECT cal_date FROM trade_calendar "
+        "WHERE exchange = ? AND is_open = True AND cal_date >= ? AND cal_date <= ? "
+        "ORDER BY cal_date",
+        [exchange, start_date, end_date]
+    ).fetchall()]
+
+
+def has_trade_calendar(conn: duckdb.DuckDBPyConnection, exchange: str = "SSE") -> bool:
+    """检查是否已有交易日历数据"""
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) FROM trade_calendar WHERE exchange = ?", [exchange]
+        ).fetchone()[0] > 0
+    except Exception:
+        return False
+
+
+# ── Phase 4: 资金流 / 研报 / 财报 CRUD ──
+
+def upsert_fund_flow(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
+    """批量写入资金流数据"""
+    if df.empty:
+        return 0
+    df = df.copy()
+    if "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+    conn.register("_tmp_ff", df)
+    cols = ", ".join(df.columns)
+    conn.execute(f"INSERT OR REPLACE INTO stock_fund_flow ({cols}) SELECT * FROM _tmp_ff")
+    conn.unregister("_tmp_ff")
+    return len(df)
+
+
+def upsert_research_reports(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
+    """批量写入研报数据（info_code 为 key，自动去重）"""
+    if df.empty:
+        return 0
+    df = df.copy()
+    conn.register("_tmp_rpt", df)
+    cols = ", ".join(df.columns)
+    conn.execute(f"INSERT OR REPLACE INTO research_reports ({cols}) SELECT * FROM _tmp_rpt")
+    conn.unregister("_tmp_rpt")
+    return len(df)
+
+
+def upsert_financial_reports(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
+    """写入财报数据（JSON 序列化）"""
+    if df.empty:
+        return 0
+    import json
+    df = df.copy()
+    # 除 ts_code/period/rpt_type 外，其余列序列化为 JSON
+    meta_cols = ["ts_code", "period", "rpt_type"]
+    data_cols = [c for c in df.columns if c not in meta_cols]
+    if data_cols:
+        df["data"] = df[data_cols].apply(lambda r: json.dumps(r.to_dict(), ensure_ascii=False), axis=1)
+    keep = [c for c in meta_cols + ["data"] if c in df.columns]
+    conn.register("_tmp_fr", df[keep])
+    cols = ", ".join(keep)
+    conn.execute(f"INSERT OR REPLACE INTO financial_reports ({cols}) SELECT * FROM _tmp_fr")
+    conn.unregister("_tmp_fr")
+    return len(df)

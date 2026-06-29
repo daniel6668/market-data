@@ -36,6 +36,13 @@ def _em():
     return _em_session
 
 
+def _safe_float(v):
+    try:
+        return float(v) if v and str(v).strip() else None
+    except (TypeError, ValueError):
+        return None
+
+
 class EastMoneySource(DataSource):
     """东方财富数据源（资金流 / 研报 / 行业）"""
 
@@ -125,9 +132,9 @@ class EastMoneySource(DataSource):
             "org_name": r.get("orgSName", ""),
             "title": r.get("title", ""),
             "info_code": r.get("infoCode", ""),
-            "eps_2026": r.get("predictThisYearEps"),
-            "eps_2027": r.get("predictNextYearEps"),
-            "eps_2028": r.get("predictNextTwoYearEps"),
+            "eps_2026": _safe_float(r.get("predictThisYearEps")),
+            "eps_2027": _safe_float(r.get("predictNextYearEps")),
+            "eps_2028": _safe_float(r.get("predictNextTwoYearEps")),
             "rating": r.get("emRatingName", ""),
         } for r in all_records])
 

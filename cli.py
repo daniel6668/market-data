@@ -9,6 +9,11 @@
   python cli.py fundflow     ← 全市场资金流采集
   python cli.py research     ← 全市场研报采集
   python cli.py financials   ← 全市场财报采集
+  python cli.py northbound   ← 北向资金
+  python cli.py margin       ← 融资融券
+  python cli.py dragon       ← 龙虎榜
+  python cli.py blocks       ← 概念板块归属
+  python cli.py holders      ← 股东户数
 """
 import sys
 from src.pipeline import Pipeline
@@ -108,6 +113,56 @@ def cmd_financials(args):
         pipeline.close()
 
 
+def cmd_northbound(args):
+    """拉取北向资金"""
+    pipeline = Pipeline()
+    try:
+        n = pipeline.update_northbound()
+        print(f"北向资金采集完成: {n} 条")
+    finally:
+        pipeline.close()
+
+
+def cmd_margin(args):
+    """采集融资融券"""
+    pipeline = Pipeline()
+    try:
+        n = pipeline.update_margin_trading("A")
+        print(f"融资融券采集完成: {n} 条")
+    finally:
+        pipeline.close()
+
+
+def cmd_dragon(args):
+    """采集龙虎榜"""
+    pipeline = Pipeline()
+    try:
+        n = pipeline.update_dragon_tiger("A")
+        print(f"龙虎榜采集完成: {n} 条")
+    finally:
+        pipeline.close()
+
+
+def cmd_blocks(args):
+    """更新概念板块归属"""
+    pipeline = Pipeline()
+    try:
+        n = pipeline.update_concept_blocks("A")
+        print(f"概念板块更新完成: {n} 条")
+    finally:
+        pipeline.close()
+
+
+def cmd_holders(args):
+    """采集股东户数"""
+    pipeline = Pipeline()
+    try:
+        n = pipeline.update_holder_num("A")
+        print(f"股东户数采集完成: {n} 条")
+    finally:
+        pipeline.close()
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -145,6 +200,11 @@ def main():
         "fundflow": cmd_fundflow,
         "research": cmd_research,
         "financials": cmd_financials,
+        "northbound": cmd_northbound,
+        "margin": cmd_margin,
+        "dragon": cmd_dragon,
+        "blocks": cmd_blocks,
+        "holders": cmd_holders,
     }
     
     if cmd not in commands:

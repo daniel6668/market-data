@@ -1,11 +1,11 @@
-"""Gradio UI — 对话表格化 + 自选池 + 全局选中"""
+"""Gradio UI — 对话表格化 + 自选池"""
 import sys, os, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import gradio as gr
 import pandas as pd
 from src.agent.llm import get_client, chat
-from src.agent.tools import TOOLS, execute_tool, _get_watchlist
+from src.agent.tools import TOOLS, execute_tool
 from src.utils import load_config
 
 config = load_config()
@@ -18,18 +18,17 @@ def _get_conn():
         _conn = get_connection(config)
     return _conn
 
-SYSTEM_PROMPT = """你是 A 股投资分析助手。用工具帮用户筛选股票、分析个股、回测策略。回复简洁，数据让表格说话。"""
+SYSTEM_PROMPT = """你是 A 股投资分析助手。用工具帮用户筛选股票。回复简洁。"""
 
-# ── 对话处理 ──
 
 def chat_respond(message, history):
     llm_cfg = config.get("llm", {})
     if not llm_cfg.get("api_key"):
-        return "⚠️ 请配置 LLM API Key", pd.DataFrame()
+        return "⚠️ 请配置 LLM API Key", pd.DataFrame(), ""
 
     client = get_client(config)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for h in history:
+    for h in (history or []):
         if isinstance(h, dict):
             messages.append(h)
         elif isinstance(h, (list, tuple)) and len(h) >= 2:
@@ -41,13 +40,12 @@ def chat_respond(message, history):
     try:
         resp = chat(client, config, messages, TOOLS)
     except Exception as e:
-        return f"❌ {e}", pd.DataFrame()
+        return f"❌ {e}", pd.DataFrame(), ""
 
     msg = resp.choices[0].message
     if not msg.tool_calls:
-        return msg.content or "", pd.DataFrame()
+        return msg.content or "", pd.DataFrame(), ""
 
-    # 执行工具
     results = []
     for tc in msg.tool_calls:
         try:
@@ -58,12 +56,12 @@ def chat_respond(message, history):
             r = execute_tool(tc.function.name, args, _get_conn())
             results.append((tc.function.name, r))
         except Exception as e:
-            results.append((tc.function.name, f"工具失败:{e}"))
+            results.append((tc.function.name, f"失败:{e}"))
 
     # 提取表格
     table_df = pd.DataFrame()
     for tool_name, r in results:
-        if tool_name in ("search_stocks", "get_watchlist"):
+        if tool_name == "search_stocks":
             try:
                 d = json.loads(r)
                 if d.get("type") == "table" and d.get("rows"):
@@ -86,129 +84,153 @@ def chat_respond(message, history):
         resp2 = chat(client, config, messages)
         text = resp2.choices[0].message.content or ""
     except Exception:
-        text = f"找到 {len(table_df)} 条结果"
-    return text, table_df
+        text = f"共 {len(table_df)} 条结果"
+    return text, table_df, ""
 
 
-# ── 自选池操作 ──
+def _read_selected_rows(df, selected_indices):
+    """从 Dataframe 和选中行号提取股票代码列表"""
+    if df is None or df.empty or not selected_indices:
+        return []
+    codes = []
+    for idx in selected_indices:
+        if idx < len(df):
+            row = df.iloc[idx]
+            codes.append(str(row.iloc[0]))  # 第一列是代码
+    return codes
 
-def _do_add_watchlist(codes, condition):
+
+def add_to_watchlist(df, selected_rows, condition):
+    codes = _read_selected_rows(df, selected_rows)
     if not codes:
-        return "⚠️ 未选中股票"
+        return "⚠️ 请先在表格中点击选中股票", pd.DataFrame()
     args = {"codes": codes, "condition": condition or ""}
-    return execute_tool("add_to_watchlist", args, _get_conn())
+    msg = execute_tool("add_to_watchlist", args, _get_conn())
+    return msg, load_watchlist_df()
 
 
-def _do_remove_watchlist(codes):
+def remove_from_watchlist(df, selected_rows):
+    codes = _read_selected_rows(df, selected_rows)
     if not codes:
-        return "⚠️ 未选中股票"
+        return "⚠️ 请先选中要移除的股票", pd.DataFrame()
     args = {"codes": codes}
-    return execute_tool("remove_from_watchlist", args, _get_conn())
+    msg = execute_tool("remove_from_watchlist", args, _get_conn())
+    return msg, load_watchlist_df()
 
 
 def load_watchlist_df():
-    wl_json = _get_watchlist(_get_conn(), {})
-    try:
-        wl = json.loads(wl_json)
-        return pd.DataFrame(wl["rows"], columns=wl["columns"]) if wl.get("rows") else pd.DataFrame()
-    except Exception:
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT w.ts_code, w.name, COALESCE(b.pe,0), COALESCE(b.pb,0),
+               w.added_at, w.source_condition
+        FROM watchlist w
+        LEFT JOIN (
+            SELECT ts_code, pe, pb FROM (
+                SELECT ts_code, pe, pb,
+                    ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn
+                FROM a_daily_basic
+            ) sub WHERE rn=1
+        ) b ON w.ts_code = b.ts_code
+        ORDER BY w.added_at DESC
+    """).fetchall()
+    if not rows:
         return pd.DataFrame()
+    data = [[r[0], r[1], round(r[2],2) if r[2] else 0, round(r[3],2) if r[3] else 0,
+             str(r[4])[:10] if r[4] else "", r[5] or ""] for r in rows]
+    return pd.DataFrame(data, columns=["代码","名称","PE","PB","加入日期","筛选条件"])
 
-
-def refresh_watchlist():
-    return load_watchlist_df()
-
-
-def add_selected_to_wl(df, condition):
-    if df is None or (hasattr(df, 'empty') and df.empty):
-        return "⚠️ 无数据可选", load_watchlist_df()
-    codes = df.iloc[:, 0].tolist() if hasattr(df, 'iloc') else []
-    msg = _do_add_watchlist(codes, condition)
-    return msg, load_watchlist_df()
-
-
-def remove_selected_from_wl(df):
-    if df is None or (hasattr(df, 'empty') and df.empty):
-        return "⚠️ 无数据可选", load_watchlist_df()
-    codes = df.iloc[:, 0].tolist() if hasattr(df, 'iloc') else []
-    msg = _do_remove_watchlist(codes)
-    return msg, load_watchlist_df()
-
-
-# ── UI 布局 ──
 
 def create_ui():
+    provider = config.get("llm", {}).get("provider", "未配置")
+
     with gr.Blocks(title="Market Data AI") as app:
-        provider = config.get("llm", {}).get("provider", "未配置")
         gr.Markdown(f"# 📊 Market Data AI — {provider}")
 
         with gr.Tab("💬 对话"):
             with gr.Row():
-                with gr.Column(scale=3):
-                    chatbot = gr.Chatbot(label="对话", height=450)
-                    msg = gr.Textbox(label="输入", placeholder="如：帮我找 PE<30 的股票")
+                with gr.Column(scale=2):
+                    chatbot = gr.Chatbot(label="对话", height=400)
+                    msg = gr.Textbox(label="输入", placeholder="如：帮我找 PE<10 的股票")
                     with gr.Row():
                         send = gr.Button("发送", variant="primary")
-                        clear = gr.Button("清空")
-                with gr.Column(scale=2):
+                with gr.Column(scale=3):
                     result_table = gr.Dataframe(
-                        label="筛选结果 (勾选后可操作)", interactive=True,
-                        headers=["代码","名称","PE","PB","涨跌幅%"],
-                        datatype=["str","str","number","number","number"],
-                        min_width=400)
-                    select_info = gr.Textbox(label="操作结果", interactive=False)
+                        label="筛选结果 — 点击行选中，Ctrl+点击多选",
+                        interactive=False,
+                        wrap=True)
                     with gr.Row():
-                        add_wl_btn = gr.Button("⭐ 加入自选池")
-                    cond_input = gr.Textbox(label="筛选条件记录", placeholder="PE<30")
+                        selected_box = gr.Textbox(label="已选中", placeholder="点击表格中的行来选中", interactive=False)
+                        clear_sel = gr.Button("清除选择")
+                    with gr.Row():
+                        cond_input = gr.Textbox(label="筛选条件记录", scale=2)
+                        add_wl_btn = gr.Button("⭐ 加入自选池", variant="primary", scale=1)
+                    op_info = gr.Textbox(label="操作结果", interactive=False)
 
             def on_send(message, history):
-                text, df = chat_respond(message, history or [])
+                text, df, _ = chat_respond(message, history or [])
                 if history is None:
                     history = []
                 new_history = history + [
                     {"role": "user", "content": message},
                     {"role": "assistant", "content": text},
                 ]
-                return new_history, df if not df.empty else None
+                return new_history, df, "点击表格行选中股票"
 
-            send.click(on_send, [msg, chatbot], [chatbot, result_table]).then(
+            def on_select(evt: gr.SelectData, df):
+                if df is None or df.empty:
+                    return "无数据"
+                idx = evt.index[0] if hasattr(evt.index, '__iter__') else evt.index
+                if isinstance(idx, list):
+                    codes = [str(df.iloc[i].iloc[0]) for i in idx if i < len(df)]
+                else:
+                    codes = [str(df.iloc[idx].iloc[0])] if idx < len(df) else []
+                return ", ".join(codes)
+
+            send.click(on_send, [msg, chatbot], [chatbot, result_table, selected_box]).then(
                 lambda: "", None, msg)
-            clear.click(lambda: ([], None, ""), None, [chatbot, result_table, select_info])
+            result_table.select(on_select, [result_table], [selected_box])
+            clear_sel.click(lambda: ("点击表格行选中股票", ""), None, [selected_box, op_info])
             add_wl_btn.click(
-                lambda df, cond: add_selected_to_wl(df, cond),
-                [result_table, cond_input], [select_info]
-            )
+                lambda df, sel, cond: add_to_watchlist(df, _parse_selection(sel), cond),
+                [result_table, selected_box, cond_input], [op_info])
 
         with gr.Tab("⭐ 自选池"):
+            wl_refresh = gr.Button("🔄 刷新")
+            wl_table = gr.Dataframe(label="我的自选池", interactive=False, wrap=True)
             with gr.Row():
-                wl_refresh = gr.Button("🔄 刷新")
-            wl_table = gr.Dataframe(
-                label="我的自选池", interactive=True,
-                headers=["代码","名称","PE","PB","加入日期","筛选条件"],
-                datatype=["str","str","number","number","str","str"])
-            with gr.Row():
-                wl_remove = gr.Button("🗑 移出选中")
+                wl_selected = gr.Textbox(label="已选中", interactive=False, scale=2)
+                wl_remove = gr.Button("🗑 移出", scale=1)
             wl_info = gr.Textbox(label="操作结果", interactive=False)
 
-            wl_refresh.click(refresh_watchlist, [], wl_table)
+            wl_refresh.click(load_watchlist_df, [], wl_table)
+            wl_table.select(
+                lambda evt: gr.SelectData, [], []  # placeholder
+            )
+            # 简化版：直接用选中代码文本
             wl_remove.click(
-                lambda df: remove_selected_from_wl(df),
-                [wl_table], [wl_info, wl_table]
+                lambda sel: remove_from_watchlist(None, _parse_selection(sel)),
+                [wl_selected], [wl_info, wl_table]
             )
 
         with gr.Tab("📊 策略"):
-            gr.Markdown("### 策略筛选器\n独立筛选面板开发中...")
-
+            gr.Markdown("### 策略筛选器\n开发中...")
         with gr.Tab("🎯 信号"):
-            gr.Markdown("### 信号面板\nPhase 4 开发中...")
+            gr.Markdown("### 信号面板\nPhase 4...")
 
     return app
+
+
+def _parse_selection(sel_text):
+    """从选中文本解析代码列表"""
+    if not sel_text or sel_text == "点击表格行选中股票":
+        return []
+    return [c.strip() for c in sel_text.split(",") if c.strip()]
 
 
 if __name__ == "__main__":
     app = create_ui()
     print("=" * 50)
-    print("  Market Data AI 启动成功！")
+    print("  Market Data AI")
     print("  http://127.0.0.1:7860")
     print("=" * 50)
     app.launch(server_name="0.0.0.0", server_port=7860)

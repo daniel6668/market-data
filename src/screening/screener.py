@@ -50,7 +50,6 @@ class StockScreener:
         if not conditions: return pd.DataFrame()
         tables_needed = sorted(set(FACTOR_SOURCES[c["factor"]][0] for c in conditions if c["factor"] in FACTOR_SOURCES))
         if not tables_needed: return pd.DataFrame()
-        # 始终 JOIN a_daily_basic
         if "a_daily_basic" not in tables_needed: tables_needed.append("a_daily_basic")
         tables_needed = sorted(set(tables_needed))
         joins, where, ta = self._build_query_parts(tables_needed, conditions)

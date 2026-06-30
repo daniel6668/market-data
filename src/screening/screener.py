@@ -109,13 +109,11 @@ class StockScreener:
                 s1 = series_map.get(col1); s2 = series_map.get(col2)
                 if s1 is None or s2 is None: ok = False; break
                 crossed = False
-                # 以最新数据日期为基准往前3天
-                latest = df['trade_date'].max()
-                cutoff = pd.Timestamp(latest) - pd.Timedelta(days=3)
-                recent = df[df['trade_date'] >= cutoff]
-                for i in range(1, len(recent)):
-                    p1, p2 = s1.iloc[df.index.get_loc(recent.index[i-1])], s2.iloc[df.index.get_loc(recent.index[i-1])]
-                    c1, c2 = s1.iloc[df.index.get_loc(recent.index[i])], s2.iloc[df.index.get_loc(recent.index[i])]
+                # 取最近3个交易日（数据最后3行）
+                n_last = min(3, len(df))
+                for i in range(len(df)-1, len(df)-n_last, -1):
+                    p1, p2 = s1.iloc[i-1], s2.iloc[i-1]
+                    c1, c2 = s1.iloc[i], s2.iloc[i]
                     if pd.notna(p1) and pd.notna(c1) and p1 < p2 and c1 > c2:
                         crossed = True; break
                 # 确保当前状态仍是金叉

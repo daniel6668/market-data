@@ -183,7 +183,7 @@ class StockScreener:
             SELECT si.ts_code, si.name,
                    COALESCE({ab}.pe,0) pe,
                    COALESCE({ab}.pb,0) pb,
-                   COALESCE(chg.ret_5d,0) change_pct
+                   ROUND(COALESCE(chg.ret_5d,0), 2) change_pct
             FROM stock_info si
             {"".join(joins)}
             LEFT JOIN (

@@ -100,8 +100,9 @@ def _read_selected_rows(df, selected_indices):
     return codes
 
 
-def add_to_watchlist(df, selected_rows, condition):
-    codes = _read_selected_rows(df, selected_rows)
+def add_to_watchlist(selected_text, condition):
+    """selected_text: 逗号分隔的代码字符串"""
+    codes = [c.strip() for c in selected_text.split(",") if c.strip() and c.strip() != "点击表格行选中股票"]
     if not codes:
         return "⚠️ 请先在表格中点击选中股票", pd.DataFrame()
     args = {"codes": codes, "condition": condition or ""}
@@ -109,8 +110,8 @@ def add_to_watchlist(df, selected_rows, condition):
     return msg, load_watchlist_df()
 
 
-def remove_from_watchlist(df, selected_rows):
-    codes = _read_selected_rows(df, selected_rows)
+def remove_from_watchlist(selected_text):
+    codes = [c.strip() for c in selected_text.split(",") if c.strip()]
     if not codes:
         return "⚠️ 请先选中要移除的股票", pd.DataFrame()
     args = {"codes": codes}
@@ -191,8 +192,8 @@ def create_ui():
             result_table.select(on_select, [result_table], [selected_box])
             clear_sel.click(lambda: ("点击表格行选中股票", ""), None, [selected_box, op_info])
             add_wl_btn.click(
-                lambda df, sel, cond: add_to_watchlist(df, _parse_selection(sel), cond),
-                [result_table, selected_box, cond_input], [op_info])
+                lambda sel, cond: add_to_watchlist(sel, cond),
+                [selected_box, cond_input], [op_info])
 
         with gr.Tab("⭐ 自选池"):
             wl_refresh = gr.Button("🔄 刷新")
@@ -203,12 +204,10 @@ def create_ui():
             wl_info = gr.Textbox(label="操作结果", interactive=False)
 
             wl_refresh.click(load_watchlist_df, [], wl_table)
-            wl_table.select(
-                lambda evt: gr.SelectData, [], []  # placeholder
-            )
+            wl_table.select(on_select, [wl_table], [wl_selected])
             # 简化版：直接用选中代码文本
             wl_remove.click(
-                lambda sel: remove_from_watchlist(None, _parse_selection(sel)),
+                remove_from_watchlist,
                 [wl_selected], [wl_info, wl_table]
             )
 

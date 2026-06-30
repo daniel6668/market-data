@@ -111,7 +111,7 @@ class StockScreener:
                 crossed = False
                 # 以最新数据日期为基准往前3天
                 latest = df['trade_date'].max()
-                cutoff = pd.Timestamp(latest) - pd.Timedelta(days=1)
+                cutoff = pd.Timestamp(latest) - pd.Timedelta(days=3)
                 recent = df[df['trade_date'] >= cutoff]
                 for i in range(1, len(recent)):
                     p1, p2 = s1.iloc[df.index.get_loc(recent.index[i-1])], s2.iloc[df.index.get_loc(recent.index[i-1])]

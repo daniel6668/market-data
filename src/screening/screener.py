@@ -119,19 +119,6 @@ class StockScreener:
 
             if not ok: continue
 
-            # 普通条件
-            for c in normal_conds:
-                f, op, v = c['factor'], c['op'], c['value']
-                col = f.replace("macd_dif","dif").replace("macd_dea","dea").replace("ma","ma")
-                val = series_map.get(col)
-                if val is None: val = close.iloc[-1] if col=='close' else None
-                else: val = val.iloc[-1]
-                if pd.isna(val): ok = False; break
-                if op=='lt' and not (val < v): ok=False; break
-                if op=='gt' and not (val > v): ok=False; break
-                if op=='lte' and not (val <= v): ok=False; break
-                if op=='gte' and not (val >= v): ok=False; break
-
             if ok:
                 pe_row = self.conn.execute(
                     "SELECT pe, pb FROM a_daily_basic WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
@@ -146,7 +133,29 @@ class StockScreener:
                     "change_pct": round(chg,2),
                 })
 
-        logger.info(f"cross search: {len(results)} results from {len(codes)} stocks")
+        logger.info(f"cross search: {len(results)} from {len(codes)} stocks, filtering normal conds...")
+        if not results: return pd.DataFrame()
+
+        # 普通条件用 SQL 二次过滤（PE/PB等非技术因子）
+        if normal_conds:
+            codes_found = [r["ts_code"] for r in results]
+            tables = sorted(set(FACTOR_SOURCES[c["factor"]][0]
+                for c in normal_conds if c["factor"] in FACTOR_SOURCES))
+            if tables:
+                if "a_daily_basic" not in tables: tables.append("a_daily_basic")
+                tables = sorted(set(tables))
+                # 用这些 codes 构建临时过滤
+                code_list = "','".join(codes_found)
+                joins2, where2, _ = self._build_parts(tables, normal_conds)
+                where2.append(f"si.ts_code IN ('{code_list}')")
+                q = f"SELECT si.ts_code FROM stock_info si {''.join(joins2)} WHERE {' AND '.join(where2)}"
+                try:
+                    valid = {r[0] for r in self.conn.execute(q).fetchall()}
+                    results = [r for r in results if r["ts_code"] in valid]
+                except Exception as e:
+                    logger.error(f"secondary filter: {e}")
+
+        logger.info(f"cross search final: {len(results)} results")
         return pd.DataFrame(results) if results else pd.DataFrame()
 
     def _build_parts(self, tables, conditions):

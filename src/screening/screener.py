@@ -86,6 +86,8 @@ class StockScreener:
             op = OP_MAP.get(cond["op"], cond["op"])
             alias = table_alias[table]
             where.append(f"{alias}.{col} {op} {cond['value']}")
+            if factor in ("pe_ttm", "pb"):
+                where.append(f"{alias}.{col} > 0")
 
         query = f"""
             SELECT si.ts_code, si.name
@@ -170,6 +172,9 @@ class StockScreener:
             op = OP_MAP.get(cond["op"], cond["op"])
             alias = table_alias[table]
             where.append(f"COALESCE({alias}.{col},0) {op} {cond['value']}")
+            # PE/PB 筛选时自动排除负值
+            if factor in ("pe_ttm", "pb"):
+                where.append(f"{alias}.{col} > 0")
 
         ab = table_alias.get("a_daily_basic", "t0")
         sf = table_alias.get("stock_factors", "t1")

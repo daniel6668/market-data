@@ -1,7 +1,4 @@
-"""选股筛选器 — 多条件组合筛选
-
-使用窗口函数取每只股票最新数据行，解决不同源日期不对齐问题。
-"""
+"""选股筛选器 — 支持跨因子比较 (如 macd_dif > macd_dea)"""
 import logging
 import duckdb
 import pandas as pd
@@ -13,179 +10,58 @@ FACTOR_SOURCES = {
     "pb":            ("a_daily_basic", "pb"),
     "turnover_rate": ("a_daily_basic", "turnover_rate"),
     "ma5":           ("stock_factors", "ma5"),
+    "ma10":          ("stock_factors", "ma10"),
     "ma20":          ("stock_factors", "ma20"),
     "ma60":          ("stock_factors", "ma60"),
     "ret_5d":        ("stock_factors", "ret_5d"),
     "ret_20d":       ("stock_factors", "ret_20d"),
+    "rsi6":          ("stock_factors", "rsi6"),
     "rsi14":         ("stock_factors", "rsi14"),
     "vol_ratio":     ("stock_factors", "vol_ratio"),
+    "macd_dif":      ("stock_factors", "macd_dif"),
+    "macd_dea":      ("stock_factors", "macd_dea"),
+    "macd_bar":      ("stock_factors", "macd_bar"),
 }
 
-# 每个数据表的列清单（用于 ROW_NUMBER 子查询）
 TABLE_COLUMNS = {
     "a_daily_basic": ["pe", "pb", "turnover_rate"],
-    "stock_factors": ["ma5", "ma20", "ma60", "ret_5d", "ret_20d",
-                       "rsi14", "vol_ratio"],
+    "stock_factors": ["ma5","ma10","ma20","ma60","ret_5d","ret_20d",
+                       "rsi6","rsi14","vol_ratio","macd_dif","macd_dea","macd_bar"],
 }
 
-OP_MAP = {
-    "gt": ">", "lt": "<", "gte": ">=",
-    "lte": "<=", "eq": "=", "ne": "!=",
-}
+OP_MAP = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<=", "eq": "=", "ne": "!="}
 
 
 class StockScreener:
-    """多条件选股筛选器 — 取每只股票各自最新数据"""
 
     def __init__(self, conn: duckdb.DuckDBPyConnection):
         self.conn = conn
 
-    def by_conditions(self, conditions: list[dict],
-                       trade_date: str = None) -> pd.DataFrame:
-        """多条件 AND 筛选"""
-        if not conditions:
-            return pd.DataFrame()
-
-        # 1. 收集涉及的表（排好序保证确定性）
-        tables_needed = sorted(set(
-            FACTOR_SOURCES[c["factor"]][0]
-            for c in conditions
-            if c["factor"] in FACTOR_SOURCES
-        ))
-        if not tables_needed:
-            return pd.DataFrame()
-
-        # 2. 构建 JOIN 子句和 WHERE 条件（同一遍循环保证 alias 一致）
-        joins = []
-        where = ["si.market = 'A'"]
-        table_alias = {}
-
-        for i, table in enumerate(tables_needed):
-            alias = f"t{i}"
-            table_alias[table] = alias
-            cols = TABLE_COLUMNS[table]
-            cols_str = ", ".join(cols)
-            joins.append(f"""
-                LEFT JOIN (
-                    SELECT ts_code, {cols_str}
-                    FROM (
-                        SELECT ts_code, {cols_str},
-                            ROW_NUMBER() OVER (
-                                PARTITION BY ts_code ORDER BY trade_date DESC
-                            ) rn
-                        FROM {table}
-                    ) sub WHERE rn = 1
-                ) {alias} ON si.ts_code = {alias}.ts_code
-            """)
-
-        for cond in conditions:
-            factor = cond["factor"]
-            if factor not in FACTOR_SOURCES:
-                continue
-            table, col = FACTOR_SOURCES[factor]
-            op = OP_MAP.get(cond["op"], cond["op"])
-            alias = table_alias[table]
-            where.append(f"{alias}.{col} {op} {cond['value']}")
-            if factor in ("pe_ttm", "pb"):
-                where.append(f"{alias}.{col} > 0")
-
-        query = f"""
-            SELECT si.ts_code, si.name
-            FROM stock_info si
-            {"".join(joins)}
-            WHERE {" AND ".join(where)}
-            ORDER BY si.ts_code
-            LIMIT 100
-        """
-        try:
-            return self.conn.execute(query).fetchdf()
-        except Exception as e:
-            logger.error(f"筛选失败: {e}\nSQL: {query[:300]}")
-            return pd.DataFrame()
-
-    def by_template(self, template: str,
-                     trade_date: str = None) -> pd.DataFrame:
-        templates = {
-            "value_low_pe": [
-                {"factor": "pe_ttm", "op": "lt", "value": 20},
-                {"factor": "pb", "op": "lt", "value": 2},
-            ],
-            "momentum_strong": [
-                {"factor": "ret_20d", "op": "gt", "value": 10},
-            ],
-            "oversold_bounce": [
-                {"factor": "rsi14", "op": "lt", "value": 35},
-                {"factor": "vol_ratio", "op": "gt", "value": 1.5},
-            ],
-        }
-        if template not in templates:
-            return pd.DataFrame()
-        return self.by_conditions(templates[template], trade_date)
+    def by_conditions(self, conditions: list[dict], trade_date=None) -> pd.DataFrame:
+        if not conditions: return pd.DataFrame()
+        tables_needed = sorted(set(FACTOR_SOURCES[c["factor"]][0] for c in conditions if c["factor"] in FACTOR_SOURCES))
+        if not tables_needed: return pd.DataFrame()
+        joins, where, ta = self._build_query_parts(tables_needed, conditions)
+        query = f"SELECT si.ts_code, si.name FROM stock_info si {''.join(joins)} WHERE {' AND '.join(where)} ORDER BY si.ts_code LIMIT 100"
+        try: return self.conn.execute(query).fetchdf()
+        except Exception as e: logger.error(f"筛选失败: {e}"); return pd.DataFrame()
 
     def search_with_indicators(self, conditions: list[dict]) -> pd.DataFrame:
-        """多条件筛选 + 返回指标列（PE/PB/涨跌幅/主力资金）"""
-        if not conditions:
-            return pd.DataFrame()
-
-        tables_needed = sorted(set(
-            FACTOR_SOURCES[c["factor"]][0]
-            for c in conditions
-            if c["factor"] in FACTOR_SOURCES
-        ))
-        if not tables_needed:
-            return pd.DataFrame()
-
-        # 始终 JOIN a_daily_basic 和 stock_factors 获取指标
-        if "a_daily_basic" not in tables_needed:
-            tables_needed.append("a_daily_basic")
-        if "stock_factors" not in tables_needed:
-            tables_needed.append("stock_factors")
+        if not conditions: return pd.DataFrame()
+        tables_needed = sorted(set(FACTOR_SOURCES[c["factor"]][0] for c in conditions if c["factor"] in FACTOR_SOURCES))
+        if not tables_needed: return pd.DataFrame()
+        # 始终 JOIN a_daily_basic
+        if "a_daily_basic" not in tables_needed: tables_needed.append("a_daily_basic")
         tables_needed = sorted(set(tables_needed))
-
-        joins = []
-        where = ["si.market = 'A'"]
-        table_alias = {}
-
-        for i, table in enumerate(tables_needed):
-            alias = f"t{i}"
-            table_alias[table] = alias
-            cols = TABLE_COLUMNS.get(table, ["*"])
-            cols_str = ", ".join(cols)
-            joins.append(f"""
-                LEFT JOIN (
-                    SELECT ts_code, {cols_str}
-                    FROM (
-                        SELECT ts_code, {cols_str},
-                            ROW_NUMBER() OVER (
-                                PARTITION BY ts_code ORDER BY trade_date DESC
-                            ) rn
-                        FROM {table}
-                    ) sub WHERE rn = 1
-                ) {alias} ON si.ts_code = {alias}.ts_code
-            """)
-
-        for cond in conditions:
-            factor = cond["factor"]
-            if factor not in FACTOR_SOURCES:
-                continue
-            table, col = FACTOR_SOURCES[factor]
-            op = OP_MAP.get(cond["op"], cond["op"])
-            alias = table_alias[table]
-            where.append(f"COALESCE({alias}.{col},0) {op} {cond['value']}")
-            # PE/PB 筛选时自动排除负值
-            if factor in ("pe_ttm", "pb"):
-                where.append(f"{alias}.{col} > 0")
-
-        ab = table_alias.get("a_daily_basic", "t0")
-        sf = table_alias.get("stock_factors", "t1")
-
+        joins, where, ta = self._build_query_parts(tables_needed, conditions)
+        ab = ta.get("a_daily_basic", "t0")
         query = f"""
             SELECT si.ts_code, si.name,
                    COALESCE({ab}.pe,0) pe,
                    COALESCE({ab}.pb,0) pb,
                    ROUND(COALESCE(chg.ret_5d,0), 2) change_pct
             FROM stock_info si
-            {"".join(joins)}
+            {''.join(joins)}
             LEFT JOIN (
                 SELECT ts_code,
                     (close - LAG(close,5) OVER w) / NULLIF(LAG(close,5) OVER w,0) * 100 ret_5d
@@ -193,12 +69,45 @@ class StockScreener:
                 WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date)
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) = 1
             ) chg ON si.ts_code = chg.ts_code
-            WHERE {" AND ".join(where)}
+            WHERE {' AND '.join(where)}
             ORDER BY {ab}.pe ASC NULLS LAST
             LIMIT 200
         """
-        try:
-            return self.conn.execute(query).fetchdf()
-        except Exception as e:
-            logger.error(f"search_with_indicators 失败: {e}")
-            return pd.DataFrame()
+        try: return self.conn.execute(query).fetchdf()
+        except Exception as e: logger.error(f"search_with_indicators: {e}"); return pd.DataFrame()
+
+    def _build_query_parts(self, tables_needed, conditions):
+        joins, where, ta = [], ["si.market = 'A'"], {}
+        for i, table in enumerate(tables_needed):
+            alias = f"t{i}"; ta[table] = alias
+            cols = ", ".join(TABLE_COLUMNS.get(table, ["*"]))
+            joins.append(f"""
+                LEFT JOIN (
+                    SELECT ts_code, {cols} FROM (
+                        SELECT ts_code, {cols}, ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn
+                        FROM {table}
+                    ) sub WHERE rn=1
+                ) {alias} ON si.ts_code = {alias}.ts_code
+            """)
+        for cond in conditions:
+            factor = cond["factor"]
+            if factor not in FACTOR_SOURCES: continue
+            table, col = FACTOR_SOURCES[factor]
+            op = OP_MAP.get(cond["op"], cond["op"])
+            alias = ta[table]
+            val = cond["value"]
+            if isinstance(val, str) and val in FACTOR_SOURCES:
+                t2, c2 = FACTOR_SOURCES[val]; a2 = ta[t2]
+                where.append(f"COALESCE({alias}.{col},0) {op} COALESCE({a2}.{c2},0)")
+            else:
+                where.append(f"COALESCE({alias}.{col},0) {op} {val}")
+            if factor in ("pe_ttm", "pb"): where.append(f"{alias}.{col} > 0")
+        return joins, where, ta
+
+    def by_template(self, template: str, trade_date=None) -> pd.DataFrame:
+        t = {
+            "value_low_pe": [{"factor":"pe_ttm","op":"lt","value":20},{"factor":"pb","op":"lt","value":2}],
+            "momentum_strong": [{"factor":"ret_20d","op":"gt","value":10}],
+            "oversold_bounce": [{"factor":"rsi14","op":"lt","value":35},{"factor":"vol_ratio","op":"gt","value":1.5}],
+        }
+        return self.by_conditions(t.get(template, []), trade_date)

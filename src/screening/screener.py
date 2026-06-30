@@ -68,81 +68,86 @@ class StockScreener:
         except Exception as e: logger.error(f"search: {e}"); return pd.DataFrame()
 
     def _search_with_cross(self, cross_conds, normal_conds):
-        """Python 侧计算交叉 + 筛选"""
-        from datetime import datetime, timedelta
-
-        # 1. 从 a_daily 拉最近 60 个交易日数据
-        codes = [r[0] for r in self.conn.execute(
-            "SELECT DISTINCT ts_code FROM a_daily WHERE trade_date >= '2026-04-01'"
-        ).fetchall()]
+        """Python 侧计算交叉 + 筛选（限制500只以防超时）"""
+        # 取最活跃的500只（按成交量排序）
+        codes = [r[0] for r in self.conn.execute("""
+            SELECT ts_code FROM a_daily
+            WHERE trade_date >= (SELECT MAX(trade_date) FROM a_daily)
+            ORDER BY vol DESC LIMIT 500
+        """).fetchall()]
         if not codes: return pd.DataFrame()
 
         results = []
         for ts_code in codes:
             df = self.conn.execute("""
                 SELECT trade_date, close FROM a_daily
-                WHERE ts_code=? ORDER BY trade_date
+                WHERE ts_code=? AND trade_date >= '2026-03-01'
+                ORDER BY trade_date
             """, [ts_code]).fetchdf()
             if len(df) < 60: continue
 
-            df['ma5'] = df['close'].rolling(5).mean()
-            df['ma10'] = df['close'].rolling(10).mean()
-            df['ma20'] = df['close'].rolling(20).mean()
-            df['ma60'] = df['close'].rolling(60).mean()
+            close = df['close']
+            # 均线
+            ma5 = close.rolling(5).mean()
+            ma10 = close.rolling(10).mean()
+            ma20 = close.rolling(20).mean()
+            ma60 = close.rolling(60).mean()
             # MACD
-            ema12 = df['close'].ewm(span=12, adjust=False).mean()
-            ema26 = df['close'].ewm(span=26, adjust=False).mean()
-            df['dif'] = ema12 - ema26
-            df['dea'] = df['dif'].ewm(span=9, adjust=False).mean()
+            ema12 = close.ewm(span=12, adjust=False).mean()
+            ema26 = close.ewm(span=26, adjust=False).mean()
+            dif = ema12 - ema26
+            dea = dif.ewm(span=9, adjust=False).mean()
 
-            # 检查交叉条件（最近3天）
+            # 检查每个交叉条件
+            series_map = {"ma5": ma5, "ma10": ma10, "ma20": ma20, "ma60": ma60,
+                          "dif": dif, "dea": dea}
             ok = True
             for c in cross_conds:
                 f1, f2 = c['factor'], c["value"]
                 col1 = f1.replace("macd_dif","dif").replace("ma","ma")
                 col2 = f2.replace("macd_dea","dea").replace("ma","ma")
-                # 近3日内是否有过交叉
-                last3 = df.tail(4)  # 需要4行来做LAG
-                if len(last3) < 4: ok = False; break
+                s1 = series_map.get(col1); s2 = series_map.get(col2)
+                if s1 is None or s2 is None: ok = False; break
                 crossed = False
-                for i in range(1, len(last3)):
-                    prev1 = last3.iloc[i-1][col1]; prev2 = last3.iloc[i-1][col2]
-                    cur1 = last3.iloc[i][col1]; cur2 = last3.iloc[i][col2]
-                    if pd.notna(prev1) and pd.notna(cur1):
-                        if prev1 < prev2 and cur1 > cur2:
-                            crossed = True; break
+                for i in range(len(df)-1, max(len(df)-4, 0), -1):
+                    if i < 1: break
+                    p1, p2 = s1.iloc[i-1], s2.iloc[i-1]
+                    c1, c2 = s1.iloc[i], s2.iloc[i]
+                    if pd.notna(p1) and pd.notna(c1) and p1 < p2 and c1 > c2:
+                        crossed = True; break
                 if not crossed: ok = False; break
 
             if not ok: continue
 
-            # 普通条件检查（最新一行）
-            latest = df.iloc[-1]
+            # 普通条件
             for c in normal_conds:
                 f, op, v = c['factor'], c['op'], c['value']
                 col = f.replace("macd_dif","dif").replace("macd_dea","dea").replace("ma","ma")
-                val = latest.get(col)
+                val = series_map.get(col)
+                if val is None: val = close.iloc[-1] if col=='close' else None
+                else: val = val.iloc[-1]
                 if pd.isna(val): ok = False; break
-                if op == 'lt' and val >= v: ok = False; break
-                if op == 'gt' and val <= v: ok = False; break
-                if op == 'lte' and val > v: ok = False; break
-                if op == 'gte' and val < v: ok = False; break
+                if op=='lt' and not (val < v): ok=False; break
+                if op=='gt' and not (val > v): ok=False; break
+                if op=='lte' and not (val <= v): ok=False; break
+                if op=='gte' and not (val >= v): ok=False; break
 
             if ok:
                 pe_row = self.conn.execute(
                     "SELECT pe, pb FROM a_daily_basic WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
                     [ts_code]).fetchone()
-                name_row = self.conn.execute(
+                name = self.conn.execute(
                     "SELECT name FROM stock_info WHERE ts_code=?", [ts_code]).fetchone()
-                chg = (df['close'].iloc[-1] / df['close'].iloc[-6] - 1) * 100 if len(df) > 5 else 0
+                chg = (close.iloc[-1]/close.iloc[-6]-1)*100 if len(df)>5 else 0
                 results.append({
-                    "ts_code": ts_code,
-                    "name": name_row[0] if name_row else "",
-                    "pe": round(pe_row[0], 2) if pe_row and pe_row[0] else 0,
-                    "pb": round(pe_row[1], 2) if pe_row and pe_row[1] else 0,
-                    "change_pct": round(chg, 2),
+                    "ts_code": ts_code, "name": name[0] if name else "",
+                    "pe": round(pe_row[0],2) if pe_row and pe_row[0] else 0,
+                    "pb": round(pe_row[1],2) if pe_row and pe_row[1] else 0,
+                    "change_pct": round(chg,2),
                 })
 
-        return pd.DataFrame(results).head(200) if results else pd.DataFrame()
+        logger.info(f"cross search: {len(results)} results from {len(codes)} stocks")
+        return pd.DataFrame(results) if results else pd.DataFrame()
 
     def _build_parts(self, tables, conditions):
         joins, where, ta = [], ["si.market='A'"], {}

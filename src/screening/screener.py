@@ -27,10 +27,19 @@ class StockScreener:
     def __init__(self, conn): self.conn = conn
 
     def search_with_indicators(self, conditions):
-        """筛选 + 输出PE/PB/涨跌幅。自动检测MACD/MA金叉死叉"""
-        if not conditions: return pd.DataFrame()
+        """筛选 + 输出PE/PB/涨跌幅（向后兼容，默认500只限制）"""
+        return self.search_full_market(conditions, market="A", lookback_days=120)
 
-        # 分离交叉条件
+    def search_full_market(self, conditions: list, market: str = "A",
+                           lookback_days: int = 120,
+                           progress_callback=None) -> pd.DataFrame:
+        """全市场筛选（支持跨市场、进度条）
+
+        progress_callback: callable(current, total, message) 用于进度反馈
+        """
+        if not conditions:
+            return pd.DataFrame()
+
         cross, normal = [], []
         for c in conditions:
             v = c.get("value")
@@ -39,17 +48,25 @@ class StockScreener:
             else:
                 normal.append(c)
 
-        # 用 Python 处理交叉条件（比 SQL 简单）
         if cross:
-            return self._search_with_cross(cross, normal)
+            if progress_callback:
+                progress_callback(0, 1, f"全市场交叉检测 ({market})...")
+            return self._search_with_cross(cross, normal, market, lookback_days)
 
-        # 纯 SQL 路径（无交叉条件）
+        # 纯 SQL 路径
         tables = sorted(set(FACTOR_SOURCES[c["factor"]][0]
             for c in normal if c["factor"] in FACTOR_SOURCES))
-        if not tables: return pd.DataFrame()
-        if "a_daily_basic" not in tables: tables.append("a_daily_basic")
+        if not tables:
+            return pd.DataFrame()
+        if "a_daily_basic" not in tables:
+            tables.append("a_daily_basic")
         tables = sorted(set(tables))
+
         joins, where, ta = self._build_parts(tables, normal)
+        # market filter
+        where = [w for w in where if not w.startswith("si.market=")]
+        where.append(f"si.market='{market}'")
+
         ab = ta.get("a_daily_basic", "t0")
         q = f"""
             SELECT si.ts_code, si.name,
@@ -62,28 +79,45 @@ class StockScreener:
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC)=1
             ) chg ON si.ts_code=chg.ts_code
             WHERE {' AND '.join(where)}
-            ORDER BY {ab}.pe ASC NULLS LAST LIMIT 200
+            ORDER BY {ab}.pe ASC NULLS LAST
         """
-        try: return self.conn.execute(q).fetchdf()
-        except Exception as e: logger.error(f"search: {e}"); return pd.DataFrame()
+        try:
+            if progress_callback:
+                progress_callback(0, 1, f"SQL 筛选执行中 ({market})...")
+            result = self.conn.execute(q).fetchdf()
+            if progress_callback:
+                progress_callback(1, 1, f"完成: {len(result)} 只")
+            return result
+        except Exception as e:
+            logger.error(f"search_full_market: {e}")
+            return pd.DataFrame()
 
-    def _search_with_cross(self, cross_conds, normal_conds):
-        """Python 侧计算交叉 + 筛选（限制500只以防超时）"""
-        # 取最活跃的500只（按成交量排序）
+    def _search_with_cross(self, cross_conds, normal_conds,
+                           market: str = "A", lookback_days: int = 120):
+        """Python 侧计算交叉 + 筛选（全市场）"""
+        # 取指定市场的全部活跃股票
         codes = [r[0] for r in self.conn.execute("""
-            SELECT ts_code FROM a_daily
-            WHERE trade_date >= (SELECT MAX(trade_date) FROM a_daily)
-            ORDER BY vol DESC LIMIT 500
-        """).fetchall()]
-        if not codes: return pd.DataFrame()
+            SELECT ts_code FROM stock_info WHERE market = ? AND list_status = 'L'
+        """, [market]).fetchall()]
+        if not codes:
+            return pd.DataFrame()
+
+        # 计算回看起始日
+        max_date = self.conn.execute(
+            "SELECT MAX(trade_date) FROM a_daily").fetchone()[0]
+        import datetime
+        if isinstance(max_date, str):
+            max_date = datetime.date.fromisoformat(str(max_date))
+        start_date = max_date - datetime.timedelta(days=lookback_days)
 
         results = []
-        for ts_code in codes:
+        total = len(codes)
+        for idx, ts_code in enumerate(codes):
             df = self.conn.execute("""
                 SELECT trade_date, close FROM a_daily
-                WHERE ts_code=? AND trade_date >= '2026-03-01'
+                WHERE ts_code=? AND trade_date >= ?
                 ORDER BY trade_date
-            """, [ts_code]).fetchdf()
+            """, [ts_code, start_date]).fetchdf()
             if len(df) < 60: continue
 
             close = df['close']
@@ -139,7 +173,7 @@ class StockScreener:
                     "change_pct": round(chg,2),
                 })
 
-        logger.info(f"cross search: {len(results)} from {len(codes)} stocks, filtering normal conds...")
+        logger.info(f"cross search ({market}): {len(results)} from {total} stocks, filtering normal conds...")
         if not results: return pd.DataFrame()
 
         # 普通条件用 SQL 二次过滤（PE/PB等非技术因子）
@@ -161,7 +195,7 @@ class StockScreener:
                 except Exception as e:
                     logger.error(f"secondary filter: {e}")
 
-        logger.info(f"cross search final: {len(results)} results")
+        logger.info(f"cross search ({market}) final: {len(results)} results")
         return pd.DataFrame(results) if results else pd.DataFrame()
 
     def _build_parts(self, tables, conditions):

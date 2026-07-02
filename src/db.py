@@ -650,13 +650,10 @@ def confirm_action(conn, action_id: int, status: str = "confirmed") -> None:
 
 
 def load_strategies_from_config(config: dict) -> dict:
-    """从配置加载策略规则并同步到 DB
+    """从配置加载策略规则
 
-    遍历 config["strategies"] 中的每个市场策略，
-    将 sell_rules 和 remove_conditions 保存到 strategy_rules 表，
-    返回 {market: strategy_config} dict。
+    返回 config["strategies"] 字典，{market: strategy_config}。
+    调用方（MonitorEngine/MaintainEngine）直接从返回的 dict 读取规则，
+    不经过 strategy_rules 表。
     """
-    strategies = config.get("strategies", {})
-    if not strategies:
-        return {}
-    return dict(strategies)
+    return dict(config.get("strategies", {}))

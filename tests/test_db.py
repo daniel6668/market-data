@@ -100,3 +100,40 @@ def test_margin_trading_upsert():
         "SELECT rzye FROM margin_trading WHERE ts_code='600519.SH'"
     ).fetchone()
     assert row[0] == 1.5e9
+
+
+def test_v2_tables_exist():
+    """v2 新增表：watchlist_performance, strategy_rules, suggested_actions, backtest_history"""
+    from src.utils import load_config
+    from src.db import get_connection
+    import tempfile, os
+
+    cfg = load_config()
+    cfg["database"]["path"] = os.path.join(tempfile.mkdtemp(), "test_v2.duckdb")
+    conn = get_connection(cfg)
+
+    tables = ["watchlist_performance", "strategy_rules", "suggested_actions", "backtest_history"]
+    existing = {r[0] for r in conn.execute(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+    ).fetchall()}
+    for t in tables:
+        assert t in existing, f"Table {t} missing"
+    conn.close()
+
+
+def test_watchlist_v2_columns():
+    """watchlist 包含 v2 新列"""
+    from src.utils import load_config
+    from src.db import get_connection
+    import tempfile, os
+
+    cfg = load_config()
+    cfg["database"]["path"] = os.path.join(tempfile.mkdtemp(), "test_wl.duckdb")
+    conn = get_connection(cfg)
+
+    cols = {r[0].lower() for r in conn.execute(
+        "DESCRIBE watchlist"
+    ).fetchall()}
+    for c in ["entry_price", "entry_date", "strategy_name", "status", "market"]:
+        assert c in cols, f"Column {c} missing from watchlist"
+    conn.close()

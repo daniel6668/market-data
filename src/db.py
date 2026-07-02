@@ -14,6 +14,29 @@ def get_connection(config: dict) -> duckdb.DuckDBPyConnection:
     return conn
 
 
+def _migrate_watchlist(conn: duckdb.DuckDBPyConnection) -> None:
+    """兼容旧 watchlist 表：添加 v2 新列（如果不存在）"""
+    new_cols = {
+        "entry_price": "DOUBLE",
+        "entry_date": "DATE",
+        "strategy_name": "VARCHAR",
+        "status": "VARCHAR DEFAULT 'active'",
+        "market": "VARCHAR",
+    }
+    try:
+        existing = {r[3].lower() for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='watchlist'"
+        ).fetchall()}
+    except Exception:
+        return  # 表还不存在，CREATE TABLE 会处理
+    for col_name, col_type in new_cols.items():
+        if col_name not in existing:
+            try:
+                conn.execute(f"ALTER TABLE watchlist ADD COLUMN {col_name} {col_type}")
+            except duckdb.CatalogException:
+                pass  # 列已存在（并发或查询遗漏）
+
+
 def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
     """创建所有表（IF NOT EXISTS 保证幂等）"""
     conn.execute("""
@@ -262,11 +285,16 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
     # ── UI: 自选池 ──
     conn.execute("""
         CREATE TABLE IF NOT EXISTS watchlist (
-            ts_code   VARCHAR NOT NULL PRIMARY KEY,
-            name      VARCHAR,
-            added_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ts_code         VARCHAR NOT NULL PRIMARY KEY,
+            name            VARCHAR,
+            added_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             source_condition TEXT,
-            notes     TEXT
+            notes           TEXT,
+            entry_price     DOUBLE,
+            entry_date      DATE,
+            strategy_name   VARCHAR,
+            status          VARCHAR DEFAULT 'active',
+            market          VARCHAR
         )
     """)
     conn.execute("""
@@ -286,6 +314,74 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             PRIMARY KEY (ts_code, trade_date)
         )
     """)
+    # ── v2: 策略研究-监控系统 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS watchlist_performance (
+            ts_code     VARCHAR NOT NULL,
+            calc_date   DATE NOT NULL,
+            entry_price DOUBLE,
+            entry_date  DATE,
+            current_price DOUBLE,
+            cumulative_return DOUBLE,
+            ret_5d      DOUBLE,
+            ret_10d     DOUBLE,
+            ret_20d     DOUBLE,
+            below_ma20  BOOLEAN DEFAULT FALSE,
+            below_ma60  BOOLEAN DEFAULT FALSE,
+            macd_cross  VARCHAR,      -- 'golden' | 'dead' | NULL
+            rsi         DOUBLE,
+            PRIMARY KEY (ts_code, calc_date)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS strategy_rules (
+            id          INTEGER PRIMARY KEY,
+            name        VARCHAR NOT NULL,
+            market      VARCHAR NOT NULL,       -- A | ETF | HK | US
+            rule_type   VARCHAR NOT NULL,       -- 'screen' | 'sell' | 'remove'
+            conditions  TEXT NOT NULL,          -- JSON 条件数组
+            is_active   BOOLEAN DEFAULT TRUE,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS suggested_actions (
+            id          INTEGER PRIMARY KEY,
+            ts_code     VARCHAR NOT NULL,
+            name        VARCHAR,
+            market      VARCHAR,
+            action      VARCHAR NOT NULL,       -- BUY | SELL | REDUCE | REMOVE
+            reason      TEXT,
+            trigger_date DATE NOT NULL,
+            metrics     TEXT,                   -- JSON: 触发时的指标快照
+            status      VARCHAR DEFAULT 'pending',  -- pending | confirmed | dismissed
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS backtest_history (
+            id            INTEGER PRIMARY KEY,
+            strategy_name VARCHAR,
+            market        VARCHAR,
+            conditions    TEXT NOT NULL,         -- JSON: 筛选条件
+            backtest_cfg  TEXT,                  -- JSON: 回测参数
+            start_date    DATE,
+            end_date      DATE,
+            total_return  DOUBLE,
+            annual_return DOUBLE,
+            sharpe_ratio  DOUBLE,
+            max_drawdown  DOUBLE,
+            win_rate      DOUBLE,
+            profit_factor DOUBLE,
+            n_stocks      INTEGER,
+            n_trades      INTEGER,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── 迁移 watchlist 表（兼容旧结构）──
+    _migrate_watchlist(conn)
 
 
 def upsert_daily(conn: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame) -> int:

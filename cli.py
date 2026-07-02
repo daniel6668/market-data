@@ -234,6 +234,45 @@ def cmd_backtest(args):
         conn.close()
 
 
+def cmd_monitor(args):
+    """手动触发监控引擎"""
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    print(f"Running monitor engine for {today}...")
+    from src.monitor.engine import MonitorEngine
+    config = load_config()
+    conn = get_connection(config)
+    try:
+        engine = MonitorEngine(conn, config)
+        result = engine.run(today)
+        print(f"  收益刷新: {result['watchlist_returns']} 只")
+        print(f"  卖出信号: {result['sell_signals']} 条")
+        print(f"  新机会:   {result['new_buy_signals']} 条")
+    finally:
+        conn.close()
+
+
+def cmd_maintain(args):
+    """手动触发维护引擎"""
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    print(f"Running maintain engine for {today}...")
+    from src.monitor.maintainer import MaintainEngine
+    config = load_config()
+    conn = get_connection(config)
+    try:
+        engine = MaintainEngine(conn, config)
+        suggestions = engine.run(today)
+        if suggestions:
+            print(f"  {len(suggestions)} remove suggestions:")
+            for s in suggestions:
+                print(f"    {s['ts_code']} {s.get('name','')}: {s['reason']}")
+        else:
+            print("  No remove suggestions.")
+    finally:
+        conn.close()
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -279,6 +318,8 @@ def main():
         "factors": cmd_factors,
         "screen": cmd_screen,
         "backtest": cmd_backtest,
+        "monitor": cmd_monitor,
+        "maintain": cmd_maintain,
     }
     
     if cmd not in commands:

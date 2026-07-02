@@ -114,6 +114,50 @@ def run_factors_update():
     logger.info("=== 因子重算结束 ===")
 
 
+def run_monitor_task():
+    """收盘后监控引擎：收益跟踪 + 卖出信号 + 新机会"""
+    config = load_config()
+    logger.info("=== 监控引擎启动 ===")
+    from src.monitor.engine import MonitorEngine
+    from src.db import get_connection
+    conn = get_connection(config)
+    try:
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        engine = MonitorEngine(conn, config)
+        result = engine.run(today)
+        logger.info(f"  收益刷新: {result['watchlist_returns']} 只")
+        logger.info(f"  卖出信号: {result['sell_signals']} 条")
+        logger.info(f"  新机会: {result['new_buy_signals']} 条")
+    except Exception as e:
+        logger.error(f"监控引擎异常: {e}")
+    finally:
+        conn.close()
+    logger.info("=== 监控引擎结束 ===")
+
+
+def run_maintain_task():
+    """收盘后维护引擎：形态破坏检测 + 移除建议"""
+    config = load_config()
+    logger.info("=== 维护引擎启动 ===")
+    from src.monitor.maintainer import MaintainEngine
+    from src.db import get_connection
+    conn = get_connection(config)
+    try:
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        engine = MaintainEngine(conn, config)
+        suggestions = engine.run(today)
+        logger.info(f"  移除建议: {len(suggestions)} 条")
+        for s in suggestions:
+            logger.info(f"    {s['ts_code']} {s.get('name','')}: {s['reason']}")
+    except Exception as e:
+        logger.error(f"维护引擎异常: {e}")
+    finally:
+        conn.close()
+    logger.info("=== 维护引擎结束 ===")
+
+
 def main():
     config = load_config()
     setup_logger(config)
@@ -137,10 +181,14 @@ def main():
     schedule.every().day.at(run_time).do(run_update, markets=markets)
     schedule.every().day.at("16:00").do(run_factors_update)
     schedule.every().day.at("16:10").do(run_phase1_update)
-    schedule.every().day.at("16:30").do(run_phase4_update)
+    schedule.every().day.at("16:20").do(run_monitor_task)
+    schedule.every().day.at("16:30").do(run_maintain_task)
+    schedule.every().day.at("16:40").do(run_phase4_update)
     logger.info("  Phase2(因子重算): 每天 16:00")
     logger.info("  Phase1(北向/融资/龙虎榜/板块/股东): 每天 16:10")
-    logger.info("  Phase4(资金流/研报/财报): 每天 16:30")
+    logger.info("  监控引擎(Monitor): 每天 16:20")
+    logger.info("  维护引擎(Maintain): 每天 16:30")
+    logger.info("  Phase4(资金流/研报/财报): 每天 16:40")
 
     # 立即跑一次（可选）
     if "--now" in sys.argv:

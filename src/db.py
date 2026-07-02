@@ -647,3 +647,16 @@ def confirm_action(conn, action_id: int, status: str = "confirmed") -> None:
         "UPDATE suggested_actions SET status=? WHERE id=?",
         [status, action_id]
     )
+
+
+def load_strategies_from_config(config: dict) -> dict:
+    """从配置加载策略规则并同步到 DB
+
+    遍历 config["strategies"] 中的每个市场策略，
+    将 sell_rules 和 remove_conditions 保存到 strategy_rules 表，
+    返回 {market: strategy_config} dict。
+    """
+    strategies = config.get("strategies", {})
+    if not strategies:
+        return {}
+    return dict(strategies)

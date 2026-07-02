@@ -55,3 +55,29 @@ llm:
   api_key: ""                        # 填入你的 API Key
   model: "deepseek-chat"            # 或 glm-4-flash / gpt-4o-mini
   base_url: ""                      # 留空自动使用 provider 默认 URL
+
+# 策略规则配置（Phase 2: 策略研究-监控系统）
+# 按市场配置止盈/止损参数、均线破位条件、移除条件等
+# strategies:
+#   A:
+#     label: "A股"
+#     sell_rules:
+#       stop_loss: -8
+#       stop_profit: 30
+#       ma_break: [ma20, ma60]
+#       pattern: [macd_dead_cross]
+#     remove_conditions:
+#       - type: price_below_ma
+#         ma: ma60
+#         consecutive_days: 5
+#   ETF:
+#     label: "ETF基金"
+#     sell_rules:
+#       stop_loss: -5
+#       stop_profit: 15
+#       ma_break: [ma20]
+#       pattern: [macd_dead_cross]
+#     remove_conditions:
+#       - type: price_below_ma
+#         ma: ma20
+#         consecutive_days: 3

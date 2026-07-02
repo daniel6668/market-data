@@ -334,8 +334,11 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
     conn.execute("""
+        CREATE SEQUENCE IF NOT EXISTS seq_strategy_rules_id START 1
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS strategy_rules (
-            id          INTEGER PRIMARY KEY,
+            id          INTEGER PRIMARY KEY DEFAULT NEXTVAL('seq_strategy_rules_id'),
             name        VARCHAR NOT NULL,
             market      VARCHAR NOT NULL,       -- A | ETF | HK | US
             rule_type   VARCHAR NOT NULL,       -- 'screen' | 'sell' | 'remove'
@@ -346,8 +349,11 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
     conn.execute("""
+        CREATE SEQUENCE IF NOT EXISTS seq_suggested_actions_id START 1
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS suggested_actions (
-            id          INTEGER PRIMARY KEY,
+            id          INTEGER PRIMARY KEY DEFAULT NEXTVAL('seq_suggested_actions_id'),
             ts_code     VARCHAR NOT NULL,
             name        VARCHAR,
             market      VARCHAR,
@@ -556,3 +562,88 @@ def upsert_financial_reports(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) 
     conn.execute(f"INSERT OR REPLACE INTO financial_reports ({cols}) SELECT * FROM _tmp_fr")
     conn.unregister("_tmp_fr")
     return len(df)
+
+
+# ── v2: 策略规则 CRUD ──
+
+def save_strategy_rule(conn, name: str, market: str, rule_type: str,
+                       conditions: list, is_active: bool = True) -> int:
+    """保存策略规则，返回 rule id"""
+    import json
+    result = conn.execute("""
+        INSERT INTO strategy_rules (name, market, rule_type, conditions, is_active)
+        VALUES (?, ?, ?, ?, ?)
+        RETURNING id
+    """, [name, market, rule_type, json.dumps(conditions, ensure_ascii=False), is_active]).fetchone()
+    return result[0] if result else 0
+
+
+def get_active_rules(conn, market: str, rule_type: str = None) -> list[dict]:
+    """获取活跃的策略规则，返回 dict 列表（conditions 已解析为 list）"""
+    import json
+    if rule_type:
+        rows = conn.execute(
+            "SELECT id, name, market, rule_type, conditions FROM strategy_rules "
+            "WHERE market=? AND rule_type=? AND is_active=TRUE ORDER BY id",
+            [market, rule_type]
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, name, market, rule_type, conditions FROM strategy_rules "
+            "WHERE market=? AND is_active=TRUE ORDER BY id",
+            [market]
+        ).fetchall()
+    return [
+        {"id": r[0], "name": r[1], "market": r[2], "rule_type": r[3],
+         "conditions": json.loads(r[4]) if r[4] else []}
+        for r in rows
+    ]
+
+
+def upsert_suggested_action(conn, ts_code: str, name: str, market: str,
+                            action: str, reason: str, trigger_date: str,
+                            metrics: dict = None) -> None:
+    """写入操作建议（同一天同股票同类 action 不重复）"""
+    import json
+    existing = conn.execute(
+        "SELECT id FROM suggested_actions WHERE ts_code=? AND action=? "
+        "AND trigger_date=? AND status='pending'",
+        [ts_code, action, trigger_date]
+    ).fetchone()
+    if existing:
+        return  # 已有待审核的同类建议
+    conn.execute("""
+        INSERT INTO suggested_actions (ts_code, name, market, action, reason, trigger_date, metrics)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, [ts_code, name, market, action, reason, trigger_date,
+          json.dumps(metrics, ensure_ascii=False) if metrics else None])
+
+
+def get_pending_actions(conn, action: str = None) -> list[dict]:
+    """获取待审核操作建议"""
+    import json
+    if action:
+        rows = conn.execute(
+            "SELECT id, ts_code, name, market, action, reason, trigger_date, metrics "
+            "FROM suggested_actions WHERE status='pending' AND action=? ORDER BY created_at DESC",
+            [action]
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, ts_code, name, market, action, reason, trigger_date, metrics "
+            "FROM suggested_actions WHERE status='pending' ORDER BY created_at DESC"
+        ).fetchall()
+    return [
+        {"id": r[0], "ts_code": r[1], "name": r[2], "market": r[3],
+         "action": r[4], "reason": r[5], "trigger_date": str(r[6]),
+         "metrics": json.loads(r[7]) if r[7] else {}}
+        for r in rows
+    ]
+
+
+def confirm_action(conn, action_id: int, status: str = "confirmed") -> None:
+    """确认或驳回操作建议"""
+    conn.execute(
+        "UPDATE suggested_actions SET status=? WHERE id=?",
+        [status, action_id]
+    )

@@ -47,3 +47,58 @@ retry:
 logging:
   level: "INFO"
   file: "data/pipeline.log"
+
+# LLM 配置（Phase 3: AI Chat）
+llm:
+  provider: deepseek
+  api_key: sk-c3d8f975b5f34382bea879e6f5ab96f8
+  model: deepseek-v4-flash
+
+# 策略规则配置（Phase 2: 策略研究-监控系统）
+strategies:
+  A:
+    label: "A股"
+    sell_rules:
+      stop_loss: -8
+      stop_profit: 30
+      ma_break: [ma20, ma60]
+      pattern: [macd_dead_cross]
+    remove_conditions:
+      - type: price_below_ma
+        ma: ma60
+        consecutive_days: 5
+      - type: macd_dead_cross
+        consecutive_days: 3
+  ETF:
+    label: "ETF基金"
+    sell_rules:
+      stop_loss: -5
+      stop_profit: 15
+      ma_break: [ma20]
+      pattern: [macd_dead_cross]
+    remove_conditions:
+      - type: price_below_ma
+        ma: ma20
+        consecutive_days: 3
+  HK:
+    label: "港股"
+    sell_rules:
+      stop_loss: -10
+      stop_profit: 20
+      ma_break: [ma60]
+      pattern: [macd_dead_cross]
+    remove_conditions:
+      - type: price_below_ma
+        ma: ma60
+        consecutive_days: 5
+  US:
+    label: "美股"
+    sell_rules:
+      stop_loss: -10
+      stop_profit: 25
+      ma_break: [ma20, ma60]
+      pattern: [macd_dead_cross]
+    remove_conditions:
+      - type: price_below_ma
+        ma: ma60
+        consecutive_days: 5

@@ -33,7 +33,7 @@ def _migrate_watchlist(conn: duckdb.DuckDBPyConnection) -> None:
         if col_name not in existing:
             try:
                 conn.execute(f"ALTER TABLE watchlist ADD COLUMN {col_name} {col_type}")
-            except duckdb.CatalogException:
+            except Exception:
                 pass  # 列已存在（并发或查询遗漏）
 
 

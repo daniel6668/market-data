@@ -69,3 +69,61 @@ def test_empty_data_returns_empty_result(db_conn):
     runner = BacktestRunner(db_conn)
     prices = runner._load_prices("NONEXIST", "2020-01-01", "2020-12-31")
     assert prices.empty
+
+
+def test_portfolio_backtest():
+    """组合回测：多只股票 + 等权重"""
+    from src.utils import load_config
+    from src.db import get_connection, upsert_daily
+    import tempfile, os
+    import pandas as pd
+    import numpy as np
+
+    cfg = load_config()
+    cfg["database"]["path"] = os.path.join(tempfile.mkdtemp(), "test_pf.duckdb")
+    conn = get_connection(cfg)
+
+    # 插入两只股票的模拟数据
+    dates = pd.date_range("2025-01-01", "2026-06-30", freq="B")
+    for code in ["000001.SZ", "000002.SZ"]:
+        np.random.seed(hash(code) % 2**32)
+        df = pd.DataFrame({
+            "ts_code": code, "trade_date": dates,
+            "open": 0, "high": 0, "low": 0,
+            "close": 10 * (1 + np.cumsum(np.random.randn(len(dates)) * 0.02)),
+            "pre_close": 0, "change": 0, "pct_chg": 0,
+            "vol": 1e6, "amount": 1e7,
+        })
+        upsert_daily(conn, "a_daily", df)
+        # adj_factor
+        adj_df = pd.DataFrame({"ts_code": code, "trade_date": dates, "adj_factor": 1.0})
+        conn.register("_tmp_adj", adj_df)
+        conn.execute("INSERT OR REPLACE INTO a_adj_factor SELECT * FROM _tmp_adj")
+        conn.unregister("_tmp_adj")
+        # stock_info
+        conn.execute("INSERT OR REPLACE INTO stock_info (ts_code, name, market) VALUES (?,?,?)",
+                     [code, f"Test{code}", "A"])
+
+    from src.backtest.runner import BacktestRunner
+    runner = BacktestRunner(conn)
+
+    prices1 = runner._load_prices("000001.SZ", "2025-01-01", "2026-06-30")
+    prices2 = runner._load_prices("000002.SZ", "2025-01-01", "2026-06-30")
+    ma20_1 = prices1.rolling(20).mean()
+    ma60_1 = prices1.rolling(60).mean()
+    ma20_2 = prices2.rolling(20).mean()
+    ma60_2 = prices2.rolling(60).mean()
+
+    result = runner.run_portfolio(
+        ["000001.SZ", "000002.SZ"],
+        {"000001.SZ": ma20_1 > ma60_1, "000002.SZ": ma20_2 > ma60_2},
+        {"000001.SZ": ma20_1 < ma60_1, "000002.SZ": ma20_2 < ma60_2},
+        "2025-01-01", "2026-06-30"
+    )
+    # 基本完整性检查
+    assert result.n_stocks == 2
+    assert result.total_return != 0  # 有结果
+    d = result.to_dict()
+    assert "total_return" in d
+    assert "stock_count" in d
+    conn.close()

@@ -36,3 +36,41 @@ class BacktestResult:
             f"夏普: {d['sharpe_ratio']} | 最大回撤: {d['max_drawdown']}% | "
             f"胜率: {d['win_rate']}% | 交易: {d['n_trades']}次"
         )
+
+
+@dataclass
+class PortfolioResult:
+    """组合回测结果"""
+    total_return: float = 0.0
+    annual_return: float = 0.0
+    sharpe_ratio: float = 0.0
+    max_drawdown: float = 0.0
+    win_rate: float = 0.0
+    n_stocks: int = 0
+    n_trades: int = 0
+    benchmark_return: float = 0.0
+    equity_curve: pd.DataFrame = field(default_factory=pd.DataFrame)
+    stock_results: list = field(default_factory=list)  # list[BacktestResult]
+    weights: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "total_return": round(self.total_return, 2),
+            "annual_return": round(self.annual_return, 2),
+            "sharpe_ratio": round(self.sharpe_ratio, 2),
+            "max_drawdown": round(self.max_drawdown, 2),
+            "win_rate": round(self.win_rate, 2),
+            "n_stocks": self.n_stocks,
+            "n_trades": self.n_trades,
+            "benchmark_return": round(self.benchmark_return, 2),
+            "stock_count": len(self.stock_results),
+        }
+
+    def summary(self) -> str:
+        d = self.to_dict()
+        return (
+            f"组合收益: {d['total_return']}% | 年化: {d['annual_return']}% | "
+            f"夏普: {d['sharpe_ratio']} | 最大回撤: {d['max_drawdown']}% | "
+            f"股票数: {d['stock_count']} | 交易: {d['n_trades']}次 | "
+            f"基准: {d['benchmark_return']}%"
+        )

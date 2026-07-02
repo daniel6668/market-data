@@ -103,6 +103,51 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "discover_stocks",
+            "description": "用自然语言描述选股策略，系统翻译为筛选条件后执行全市场扫描+组合回测。"
+                           "支持描述：低估值、MACD金叉、放量上涨、超卖反弹等。"
+                           "示例：'找出A股PE<15、MACD金叉的股票并回测'",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "自然语言策略描述"},
+                    "market": {"type": "string", "enum": ["A","ETF","HK","US","all"]},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_monitor_signals",
+            "description": "查看最新监控信号：卖出建议、移除建议、新机会",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["SELL","REDUCE","REMOVE","BUY","all"]},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confirm_monitor_action",
+            "description": "确认或驳回监控建议",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action_id": {"type": "integer"},
+                    "decision": {"type": "string", "enum": ["confirmed","dismissed"]},
+                },
+                "required": ["action_id", "decision"],
+            },
+        },
+    },
 ]
 
 
@@ -115,6 +160,9 @@ def execute_tool(name: str, args: dict, conn: duckdb.DuckDBPyConnection) -> str:
         "add_to_watchlist": _add_to_watchlist,
         "get_watchlist": _get_watchlist,
         "remove_from_watchlist": _remove_from_watchlist,
+        "discover_stocks": _discover_stocks,
+        "get_monitor_signals": _get_monitor_signals,
+        "confirm_monitor_action": _confirm_monitor_action,
     }
     return m.get(name, lambda c, a: "未知工具")(conn, args)
 
@@ -194,9 +242,23 @@ def _add_to_watchlist(conn, args):
     if not codes: return "未指定股票"
     added = 0
     for code in codes:
-        name_row = conn.execute("SELECT name FROM stock_info WHERE ts_code LIKE ?", [f"{code}%"]).fetchone()
+        name_row = conn.execute(
+            "SELECT name, market FROM stock_info WHERE ts_code LIKE ?", [f"{code}%"]).fetchone()
         name = name_row[0] if name_row else code
-        conn.execute("INSERT OR REPLACE INTO watchlist (ts_code, name, source_condition) VALUES (?,?,?)", [code, name, condition])
+        market = name_row[1] if name_row else "A"
+
+        # 获取当前价格作为 entry_price
+        price_row = conn.execute(
+            "SELECT close FROM a_daily WHERE ts_code LIKE ? ORDER BY trade_date DESC LIMIT 1",
+            [f"{code}%"]).fetchone()
+        entry_price = price_row[0] if price_row else None
+
+        from datetime import date
+        conn.execute("""
+            INSERT OR REPLACE INTO watchlist
+            (ts_code, name, source_condition, status, market, entry_price, entry_date)
+            VALUES (?, ?, ?, 'active', ?, ?, ?)
+        """, [code, name, condition, market, entry_price, date.today()])
         added += 1
     return f"✅ 已添加 {added} 只到自选池"
 
@@ -218,3 +280,95 @@ def _remove_from_watchlist(conn, args):
     if not codes: return "未指定股票"
     for code in codes: conn.execute("DELETE FROM watchlist WHERE ts_code=?", [code])
     return f"✅ 已移除 {len(codes)} 只"
+
+
+def _discover_stocks(conn, args):
+    """发现引擎：NL → 条件翻译 → 筛选 → 回测"""
+    query = args.get("query", "")
+    if not query:
+        return "请描述选股策略"
+
+    # 加载配置
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from src.utils import load_config
+    from src.agent.llm import get_client
+    config = load_config()
+
+    if not config.get("llm", {}).get("api_key"):
+        return json.dumps({"type": "error", "message": "请配置 LLM API Key"}, ensure_ascii=False)
+
+    try:
+        from src.discover.translator import translate_nl_to_conditions
+        from src.discover.compiler import validate_plan, compile_and_execute
+    except ImportError:
+        return json.dumps({"type": "error", "message": "发现引擎未安装"}, ensure_ascii=False)
+
+    client = get_client(config)
+    plan = translate_nl_to_conditions(client, config, query)
+    ok, err_msg = validate_plan(plan)
+    if not ok:
+        return json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False)
+
+    result = compile_and_execute(conn, plan)
+    df = result["df"]
+
+    if df.empty:
+        return json.dumps({
+            "type": "table", "columns": [], "rows": [], "total": 0,
+            "hint": f"条件: {json.dumps(plan['conditions'], ensure_ascii=False)}，无匹配结果",
+        }, ensure_ascii=False)
+
+    # 构建响应
+    cols = ["ts_code", "name", "pe", "pb", "change_pct"]
+    avail = [c for c in cols if c in df.columns]
+    rows = df[avail].values.tolist()
+    col_labels = {"ts_code": "代码", "name": "名称", "pe": "PE", "pb": "PB", "change_pct": "涨跌幅%"}
+
+    response_parts = [f"筛选条件: {json.dumps(plan['conditions'], ensure_ascii=False)}"]
+    response_parts.append(f"匹配 {len(df)} 只股票")
+
+    bt = result.get("backtest_result")
+    if bt:
+        response_parts.append(f"\n**组合回测** ({plan.get('backtest',{}).get('start','')} ~ {plan.get('backtest',{}).get('end','')})")
+        response_parts.append(bt.summary())
+
+    return json.dumps({
+        "type": "table",
+        "columns": [col_labels.get(c, c) for c in avail],
+        "rows": rows,
+        "total": len(df),
+        "hint": "\n".join(response_parts),
+        "plan": plan,
+    }, ensure_ascii=False, default=str)
+
+
+def _get_monitor_signals(conn, args):
+    """查看监控信号"""
+    from src.db import get_pending_actions
+
+    action = args.get("action", "all")
+    actions = get_pending_actions(conn, action if action != "all" else None)
+
+    if not actions:
+        return json.dumps({"type": "text", "text": "当前无待处理信号"}, ensure_ascii=False)
+
+    rows = [[a["ts_code"], a["name"], a["action"], a["reason"], a["trigger_date"]]
+            for a in actions]
+    return json.dumps({
+        "type": "table",
+        "columns": ["代码", "名称", "建议", "原因", "触发日期"],
+        "rows": rows,
+        "total": len(actions),
+        "action_ids": [a["id"] for a in actions],
+    }, ensure_ascii=False, default=str)
+
+
+def _confirm_monitor_action(conn, args):
+    """确认/驳回监控建议"""
+    aid = args.get("action_id")
+    decision = args.get("decision", "dismissed")
+    from src.db import confirm_action
+
+    confirm_action(conn, aid, decision)
+    return f"已{'确认' if decision == 'confirmed' else '驳回'}建议 #{aid}"

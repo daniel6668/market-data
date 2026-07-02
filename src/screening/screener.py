@@ -27,7 +27,7 @@ class StockScreener:
     def __init__(self, conn): self.conn = conn
 
     def search_with_indicators(self, conditions):
-        """筛选 + 输出PE/PB/涨跌幅（向后兼容，默认500只限制）"""
+        """筛选 + 输出PE/PB/涨跌幅（向后兼容，全市场扫描）"""
         return self.search_full_market(conditions, market="A", lookback_days=120)
 
     def search_full_market(self, conditions: list, market: str = "A",
@@ -51,7 +51,7 @@ class StockScreener:
         if cross:
             if progress_callback:
                 progress_callback(0, 1, f"全市场交叉检测 ({market})...")
-            return self._search_with_cross(cross, normal, market, lookback_days)
+            return self._search_with_cross(cross, normal, market, lookback_days, progress_callback)
 
         # 纯 SQL 路径
         tables = sorted(set(FACTOR_SOURCES[c["factor"]][0]
@@ -93,7 +93,8 @@ class StockScreener:
             return pd.DataFrame()
 
     def _search_with_cross(self, cross_conds, normal_conds,
-                           market: str = "A", lookback_days: int = 120):
+                           market: str = "A", lookback_days: int = 120,
+                           progress_callback=None):
         """Python 侧计算交叉 + 筛选（全市场）"""
         # 取指定市场的全部活跃股票
         codes = [r[0] for r in self.conn.execute("""
@@ -112,7 +113,14 @@ class StockScreener:
 
         results = []
         total = len(codes)
+        last_pct = -1
         for idx, ts_code in enumerate(codes):
+            # 进度回调（每 5% 触发一次）
+            if progress_callback and total > 0:
+                pct = idx * 100 // total
+                if pct >= last_pct + 5:
+                    last_pct = pct
+                    progress_callback(idx, total, f"交叉检测 {market} ({pct}%)")
             df = self.conn.execute("""
                 SELECT trade_date, close FROM a_daily
                 WHERE ts_code=? AND trade_date >= ?
